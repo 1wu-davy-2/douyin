@@ -1,0 +1,10 @@
+data/
+*.db
+*.db-journal
+dist/
+node_modules/
+.env
+logs/
+*.part
+__pycache__/
+.venv/
