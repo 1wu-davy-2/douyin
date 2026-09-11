@@ -5,10 +5,10 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 0 | 脚手架 + 冻结契约 + README | ✅ 17ec5aa |
-| ① | Go 基础框架(config/db/auth/events/sidecar/provider/settings/SSE/静态) | 🔄 进行中 |
+| ① | Go 基础框架(config/db/auth/events/sidecar/provider/settings/SSE/静态) | ✅ 92c6b03 |
 | ② | Python F2 侧车(profile/posts/work + mock,严格错误语义) | ✅ 9d1ced3 |
-| ③ | React 前端(UI组件/SSE/queries ✅;剩 4 页面 + 路由装配) | ⏸ 等并发名额 |
-| ④ | Go 扫描器 + 订阅调度(漏扫修复核心) | 待 ① |
+| ③ | React 前端全部页面(构建零错误,mock 端到端通过) | ✅ 9e5cbaa |
+| ④ | Go 扫描器 + 订阅调度(漏扫修复核心) | 🔄 进行中 |
 | ⑤ | Go 下载器 + 任务 REST + SSE | 待 ① |
 | 6 | 主线联调(mock 端到端)+ 单二进制构建 | 待 ④⑤ |
 | 7 | import-legacy 旧库迁移工具 | 待 6 |
