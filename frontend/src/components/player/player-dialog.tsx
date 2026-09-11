@@ -18,7 +18,7 @@ const AUTO_NEXT_KEY = "douyin-archive:auto-next";
 
 export function PlayerDialog() {
   const player = usePlayer();
-  const { next, prev, close, jump } = usePlayerActions();
+  const { next, prev, close } = usePlayerActions();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [autoNext, setAutoNext] = useState(() => localStorage.getItem(AUTO_NEXT_KEY) === "true");
   const [playError, setPlayError] = useState(false);
@@ -152,6 +152,3 @@ export function PlayerDialog() {
     </Dialog>
   );
 }
-
-/** 打开播放器的辅助:同一列表里定位点击项。 */
-export { jump as _unusedJump } from "../../lib/player-store";
