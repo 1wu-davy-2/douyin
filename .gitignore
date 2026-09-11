@@ -1,8 +1,9 @@
 data/
 *.db
 *.db-journal
-dist/
 node_modules/
+frontend/dist/*
+!frontend/dist/index.html
 .env
 logs/
 *.part
