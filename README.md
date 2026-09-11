@@ -24,11 +24,14 @@ Go 后端 ──直连 CDN 下载(带宽大头不经过 Python)
 
 ## 开发
 
-环境要求:Go 1.27(`E:\tmp\tools\go`,未入 PATH)、Node 22、Python 3.12
+环境要求:Go 1.27(`E:\tmp\tools\go`,未入 PATH)、Node 22、Python 3.12。**go.mod 在 backend/ 下,Go 命令须在 backend/ 目录执行**。
 
 ```powershell
-# 后端(开发模式,mock 数据,无需 cookie)
-$env:DY_MOCK=1; E:\tmp\tools\go\bin\go.exe run ./backend/cmd/server
+# 一键开发(mock 后端 + Vite)
+powershell -File scripts\dev.ps1
+
+# 或手动:后端(开发模式,mock 数据,无需 cookie)
+cd backend; $env:DY_MOCK=1; $env:DY_DATA_DIR="..\\data"; E:\tmp\tools\go\bin\go.exe run ./cmd/server
 
 # 前端(dev server :5173,代理 /api -> :8787)
 npm install --prefix frontend; npm run dev --prefix frontend
@@ -40,9 +43,8 @@ python sidecar/main.py --port 18787 --token dev --mock
 ## 生产运行
 
 ```powershell
-npm run build --prefix frontend          # 产出 frontend/dist
-E:\tmp\tools\go\bin\go.exe build -o douyin-server.exe ./backend/cmd/server
-.\douyin-server.exe                       # 单二进制,http://127.0.0.1:8787
+powershell -File scripts\build.ps1        # 前端构建 -> 拷入 embed 目录 -> 单二进制
+.\backend\douyin-server.exe               # http://127.0.0.1:8787
 ```
 
 首次打开网页创建管理员;在"设置"粘贴抖音 Cookie 并把 provider_mode 切到 `sidecar` 即可真实扫描。
@@ -50,5 +52,5 @@ E:\tmp\tools\go\bin\go.exe build -o douyin-server.exe ./backend/cmd/server
 ## 数据迁移
 
 ```powershell
-.\douyin-server.exe -mode import-legacy -legacy-db "E:\home\douyin-archive\data\app.db"
+.\douyin-server.exe -mode=import-legacy "E:\home\douyin-archive\data\app.db"
 ```
