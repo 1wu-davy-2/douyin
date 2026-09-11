@@ -1,0 +1,10 @@
+# Go cannot embed files outside its module (frontend/dist is a sibling of
+# backend/), so the SPA build output is mirrored into internal/api/dist before
+# `go build`. The committed index.html is the placeholder so the embed always
+# works; real builds overwrite the rest.
+#
+# Build step (repo root):
+#   npm run build --prefix frontend
+#   cp -r frontend/dist/. backend/internal/api/dist/
+dist/*
+!dist/index.html
