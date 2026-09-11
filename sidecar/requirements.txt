@@ -1,0 +1,4 @@
+# 抖音归档工具 v2 签名侧车依赖(pip 实装版本)
+f2==0.0.1.7
+# F2 依赖 httpx;本机走 SOCKS 系统代理时 httpx 需要 socksio,否则 import f2 即失败
+socksio==1.0.0
