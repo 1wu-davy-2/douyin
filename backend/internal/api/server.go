@@ -3,16 +3,19 @@
 package api
 
 import (
+	"database/sql"
 	"douyin/backend/internal/auth"
 	"douyin/backend/internal/config"
 	"douyin/backend/internal/events"
 	"douyin/backend/internal/provider"
+	"douyin/backend/internal/scanner"
 	"douyin/backend/internal/settings"
 	"douyin/backend/internal/sidecar"
 	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Deps carries everything the handlers need.
@@ -23,6 +26,8 @@ type Deps struct {
 	Manager  *sidecar.Manager
 	Store    *settings.Store
 	Resolver *provider.Resolver
+	DB       *sql.DB
+	Scanner  *scanner.Scanner
 }
 
 // Server is the HTTP application.
@@ -49,10 +54,14 @@ func (s *Server) Handler() http.Handler {
 	s.registerSettingsRoutes(mux) // settings.go
 	s.registerEventRoutes(mux)    // events.go
 
+	// -- Stage 4 (implemented) ------------------------------------------------
+	s.registerCreatorRoutes(mux)      // creators.go (works + collections included)
+	s.registerSubscriptionRoutes(mux) // subscriptions.go
+
 	// -- Later stages (registered by the corresponding files) -----------------
-	// creators.go, downloads.go, subscriptions.go, assets.go currently hold no
-	// routes; every unregistered /api path still passes the auth guard below,
-	// so it answers 401 when unauthenticated instead of leaking a 404.
+	// downloads.go, assets.go currently hold no routes; every unregistered
+	// /api path still passes the auth guard below, so it answers 401 when
+	// unauthenticated instead of leaking a 404.
 
 	apiHandler := s.authGuard(mux)
 
@@ -79,6 +88,9 @@ func (s *Server) authGuard(next http.Handler) http.Handler {
 }
 
 // ------------------------------------------------------------------ helpers --
+
+// nowRFC3339 renders the current UTC time in the contract's wire format.
+func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
 
 // writeJSON emits a JSON response.
 func writeJSON(w http.ResponseWriter, status int, v any) {

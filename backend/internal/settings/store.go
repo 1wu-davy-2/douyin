@@ -167,7 +167,7 @@ func (s *Store) View(ctx context.Context) (View, error) {
 		ScanPageDelayMs:          2000,
 		ScanMaxEmptyPages:        3,
 		IncrementalStopPages:     3,
-		CompletenessGapThreshold: 10,
+		CompletenessGapThreshold: 5,
 		SidecarIdleTimeoutMin:    int(s.cfg.SidecarIdleTimeout / time.Minute),
 		SMTP: SMTPView{
 			Host:        asString(smtp["host"]),

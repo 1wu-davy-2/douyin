@@ -15,6 +15,7 @@ import (
 	"douyin/backend/internal/db"
 	"douyin/backend/internal/events"
 	"douyin/backend/internal/provider"
+	"douyin/backend/internal/scanner"
 	"douyin/backend/internal/settings"
 	"douyin/backend/internal/sidecar"
 )
@@ -38,6 +39,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *events.Bus) {
 	store := settings.NewStore(database, cfg)
 	authService := auth.New(database)
 	resolver := provider.NewResolver(cfg, mgr, store)
+	scanSvc := scanner.New(context.Background(), resolver, database, bus, store)
 
 	server := httptest.NewServer(New(Deps{
 		Cfg:      cfg,
@@ -46,6 +48,8 @@ func newTestServer(t *testing.T) (*httptest.Server, *events.Bus) {
 		Manager:  mgr,
 		Store:    store,
 		Resolver: resolver,
+		DB:       database,
+		Scanner:  scanSvc,
 	}).Handler())
 	t.Cleanup(server.Close)
 	return server, bus

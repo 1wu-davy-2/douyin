@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,6 +26,8 @@ import (
 	"douyin/backend/internal/db"
 	"douyin/backend/internal/events"
 	"douyin/backend/internal/provider"
+	"douyin/backend/internal/scanner"
+	"douyin/backend/internal/scheduler"
 	"douyin/backend/internal/settings"
 	"douyin/backend/internal/sidecar"
 )
@@ -84,6 +87,22 @@ func run(ctx context.Context, cfg config.Settings) error {
 	resolver := provider.NewResolver(cfg, mgr, store)
 	authService := auth.New(database)
 
+	// Scanner (stage 4): owns scan runs, single-flight, SSE progress events.
+	// The Enqueuer seam stays nil until the downloader stage (5) injects it.
+	scanSvc := scanner.New(ctx, resolver, database, bus, store)
+	if err := scanSvc.RecycleStaleRuns(); err != nil {
+		log.Printf("recycle stale scan runs: %v", err)
+	}
+
+	// Scheduler (stage 4): single goroutine servicing due subscriptions.
+	sched := scheduler.New(database, scanSvc, store)
+	var schedWG sync.WaitGroup
+	schedWG.Add(1)
+	go func() {
+		defer schedWG.Done()
+		sched.Run(ctx)
+	}()
+
 	srv := &http.Server{
 		// Local single-user tool; loopback only per README.
 		Addr: fmt.Sprintf("127.0.0.1:%d", cfg.Port),
@@ -94,6 +113,8 @@ func run(ctx context.Context, cfg config.Settings) error {
 			Manager:  mgr,
 			Store:    store,
 			Resolver: resolver,
+			DB:       database,
+			Scanner:  scanSvc,
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -119,13 +140,17 @@ func run(ctx context.Context, cfg config.Settings) error {
 	}
 
 	// Graceful shutdown: stop accepting, let handlers finish (bounded — SSE
-	// connections are closed for real after the grace period), then sidecar
-	// (defer) and database (defer) are released.
+	// connections are closed for real after the grace period), then stop the
+	// scheduler and drain in-flight scans (their contexts derive from ctx, so
+	// they finalize as failed), and finally sidecar (defer) and database
+	// (defer) are released.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		// Active SSE connections block Shutdown; close them now.
 		_ = srv.Close()
 	}
+	schedWG.Wait()
+	scanSvc.WaitIdle(5 * time.Second)
 	return nil
 }
