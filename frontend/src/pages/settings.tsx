@@ -26,6 +26,7 @@ interface SettingsForm {
   download_quality: string;
   scan_page_delay_ms: string;
   incremental_stop_pages: string;
+  scan_concurrency: string;
   completeness_gap_threshold: string;
   smtp: { host: string; port: string; username: string; password: string; from: string; to: string };
   notify_on_new_work: boolean;
@@ -40,6 +41,7 @@ function toForm(s: Settings): SettingsForm {
     download_quality: s.download_quality,
     scan_page_delay_ms: String(s.scan_page_delay_ms),
     incremental_stop_pages: String(s.incremental_stop_pages),
+    scan_concurrency: String(s.scan_concurrency),
     completeness_gap_threshold: String(s.completeness_gap_threshold),
     smtp: { ...s.smtp, port: String(s.smtp.port) },
     notify_on_new_work: s.notify_on_new_work,
@@ -126,14 +128,16 @@ export function SettingsPage() {
   const saveScan = () => {
     const delay = toInt(form.scan_page_delay_ms, 1000, 10000);
     const stopPages = toInt(form.incremental_stop_pages, 1, 10);
+    const concurrency = toInt(form.scan_concurrency, 1, 5);
     const gap = toInt(form.completeness_gap_threshold, 1, 50);
-    if (delay === null || stopPages === null || gap === null) {
-      toast.error("扫描参数不合法", { description: "请检查输入范围:翻页间隔 1000~10000,空页停止 1~10,缺口阈值 1~50" });
+    if (delay === null || stopPages === null || concurrency === null || gap === null) {
+      toast.error("扫描参数不合法", { description: "请检查输入范围:翻页间隔 1000~10000,空页停止 1~10,扫描并发 1~5,缺口阈值 1~50" });
       return;
     }
     saveMut.mutate({
       scan_page_delay_ms: delay,
       incremental_stop_pages: stopPages,
+      scan_concurrency: concurrency,
       completeness_gap_threshold: gap,
     });
   };
@@ -220,7 +224,15 @@ export function SettingsPage() {
           <CardTitle className="text-base">扫描</CardTitle>
           <CardDescription>增量扫描节奏与完整性对账</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-3">
+        <CardContent className="grid gap-4 md:grid-cols-4">
+          <Field label="扫描并发(博主数)" htmlFor="set-scanconc" hint="1 ~ 5,同时扫描的博主数">
+            <Input
+              id="set-scanconc"
+              inputMode="numeric"
+              value={form.scan_concurrency}
+              onChange={(e) => update({ scan_concurrency: e.target.value })}
+            />
+          </Field>
           <Field label="翻页间隔(毫秒)" htmlFor="set-delay" hint="1000 ~ 10000">
             <Input
               id="set-delay"

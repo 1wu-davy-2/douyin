@@ -172,6 +172,7 @@ interface MockSettings {
   download_quality: string;
   scan_page_delay_ms: number;
   scan_max_empty_pages: number;
+  scan_concurrency: number;
   incremental_stop_pages: number;
   completeness_gap_threshold: number;
   sidecar_idle_timeout_minutes: number;
@@ -298,6 +299,7 @@ const state: MockState = {
     download_quality: "1080p",
     scan_page_delay_ms: 2000,
     scan_max_empty_pages: 3,
+    scan_concurrency: 3,
     incremental_stop_pages: 2,
     completeness_gap_threshold: 10,
     sidecar_idle_timeout_minutes: 10,
@@ -1451,6 +1453,7 @@ export function mockRoute(req: MockRequest): MockResponse {
       if (b.download_quality !== undefined) s.download_quality = str(b.download_quality, s.download_quality);
       if (b.scan_page_delay_ms !== undefined) s.scan_page_delay_ms = Math.min(10000, Math.max(1000, num(b.scan_page_delay_ms, s.scan_page_delay_ms)));
       if (b.scan_max_empty_pages !== undefined) s.scan_max_empty_pages = Math.min(10, Math.max(1, num(b.scan_max_empty_pages, s.scan_max_empty_pages)));
+      if (b.scan_concurrency !== undefined) s.scan_concurrency = Math.min(5, Math.max(1, num(b.scan_concurrency, s.scan_concurrency)));
       if (b.incremental_stop_pages !== undefined) s.incremental_stop_pages = Math.min(10, Math.max(1, num(b.incremental_stop_pages, s.incremental_stop_pages)));
       if (b.completeness_gap_threshold !== undefined) s.completeness_gap_threshold = Math.min(50, Math.max(1, num(b.completeness_gap_threshold, s.completeness_gap_threshold)));
       if (b.sidecar_idle_timeout_minutes !== undefined) s.sidecar_idle_timeout_minutes = Math.max(1, num(b.sidecar_idle_timeout_minutes, s.sidecar_idle_timeout_minutes));

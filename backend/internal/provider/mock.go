@@ -120,7 +120,7 @@ func (p *MockProvider) PostsPage(_ context.Context, _ string, cursor string, cou
 		items = append(items, PostItem{
 			ItemID:      fmt.Sprintf("mock_%04d", pos),
 			Title:       fmt.Sprintf("Mock作品 #%d", pos),
-			CoverURL:    fmt.Sprintf("https://mock.example/cover/%d.jpg", pos),
+			CoverURL:    fmt.Sprintf("/mockcdn/mock_gallery_%d/cover.jpg", pos),
 			Duration:    duration,
 			PublishedAt: mockPublishedAt(pos),
 			MixID:       mixID,

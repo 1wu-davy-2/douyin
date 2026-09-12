@@ -130,6 +130,7 @@ type View struct {
 	DownloadQuality          string   `json:"download_quality"`
 	ScanPageDelayMs          int      `json:"scan_page_delay_ms"`
 	ScanMaxEmptyPages        int      `json:"scan_max_empty_pages"`
+	ScanConcurrency          int      `json:"scan_concurrency"`
 	IncrementalStopPages     int      `json:"incremental_stop_pages"`
 	CompletenessGapThreshold int      `json:"completeness_gap_threshold"`
 	SidecarIdleTimeoutMin    int      `json:"sidecar_idle_timeout_minutes"`
@@ -175,6 +176,7 @@ func (s *Store) View(ctx context.Context) (View, error) {
 		DownloadQuality:          "1080p",
 		ScanPageDelayMs:          2000,
 		ScanMaxEmptyPages:        3,
+		ScanConcurrency:          3,
 		IncrementalStopPages:     3,
 		CompletenessGapThreshold: 5,
 		SidecarIdleTimeoutMin:    int(s.cfg.SidecarIdleTimeout / time.Minute),
@@ -202,6 +204,9 @@ func (s *Store) View(ctx context.Context) (View, error) {
 	}
 	if n := decodeInt(values["scan_max_empty_pages"]); n > 0 {
 		v.ScanMaxEmptyPages = n
+	}
+	if n := decodeInt(values["scan_concurrency"]); n > 0 {
+		v.ScanConcurrency = n
 	}
 	if n := decodeInt(values["incremental_stop_pages"]); n > 0 {
 		v.IncrementalStopPages = n
@@ -244,6 +249,7 @@ type Patch struct {
 	DownloadQuality          *string    `json:"download_quality"`
 	ScanPageDelayMs          *int       `json:"scan_page_delay_ms"`
 	ScanMaxEmptyPages        *int       `json:"scan_max_empty_pages"`
+	ScanConcurrency          *int       `json:"scan_concurrency"`
 	IncrementalStopPages     *int       `json:"incremental_stop_pages"`
 	CompletenessGapThreshold *int       `json:"completeness_gap_threshold"`
 	SidecarIdleTimeoutMin    *int       `json:"sidecar_idle_timeout_minutes"`
@@ -304,6 +310,12 @@ func (s *Store) Apply(ctx context.Context, patch Patch) (bool, error) {
 			return false, fmt.Errorf("settings: scan_max_empty_pages must be 1-10")
 		}
 		updates["scan_max_empty_pages"] = mustJSON(*patch.ScanMaxEmptyPages)
+	}
+	if patch.ScanConcurrency != nil {
+		if *patch.ScanConcurrency < 1 || *patch.ScanConcurrency > 5 {
+			return false, fmt.Errorf("settings: scan_concurrency must be 1-5")
+		}
+		updates["scan_concurrency"] = mustJSON(*patch.ScanConcurrency)
 	}
 	if patch.IncrementalStopPages != nil {
 		if *patch.IncrementalStopPages < 1 || *patch.IncrementalStopPages > 10 {

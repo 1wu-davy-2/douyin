@@ -6,9 +6,9 @@
  */
 import { useEffect, useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Library as LibraryIcon, Plus } from "lucide-react";
+import { Library as LibraryIcon, Plus, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
-import { createCreator } from "../api/endpoints";
+import { createCreator, rescanCreator } from "../api/endpoints";
 import { qk, useCollections, useCreators, useWorks } from "../api/queries";
 import type { Quality, WorkSort } from "../api/types";
 import { EmptyState } from "../components/empty-state";
@@ -139,6 +139,17 @@ export function LibraryPage() {
     onError: (e) => toast.error("创建下载任务失败", { description: e.message }),
   });
 
+  // ---------- 重新扫描 ----------
+  const rescanMut = useMutation({
+    mutationFn: (id: number) => rescanCreator(id, true),
+    onSuccess: (_r, id) => {
+      const name = creatorList.find((c) => c.id === id)?.nickname ?? "博主";
+      toast.info(`已开始重新扫描 ${name}`, { description: "进度见博主卡片,完成后自动刷新列表" });
+      void queryClient.invalidateQueries({ queryKey: ["creators"] });
+    },
+    onError: (e) => toast.error("重新扫描失败", { description: e.message }),
+  });
+
   // ---------- 渲染 ----------
   return (
     <div className="flex gap-4 p-4">
@@ -192,6 +203,8 @@ export function LibraryPage() {
               active={c.id === selectedCreatorId}
               live={scans.byCreator.get(c.id)}
               onClick={() => setSelectedCreatorId(c.id)}
+              onRescan={() => rescanMut.mutate(c.id)}
+              rescanPending={rescanMut.isPending && rescanMut.variables === c.id}
             />
           ))
         )}
@@ -292,18 +305,30 @@ function CreatorCard({
   active,
   live,
   onClick,
+  onRescan,
+  rescanPending,
 }: {
   creator: { id: number; nickname: string; avatar_url: string; works_count: number; downloaded_count: number };
   active: boolean;
   live: LiveScan | undefined;
   onClick: () => void;
+  onRescan: () => void;
+  rescanPending: boolean;
 }) {
+  const scanning = Boolean(live?.running);
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       className={cn(
-        "w-full rounded-xl border p-3 text-left transition-colors",
+        "relative w-full cursor-pointer rounded-xl border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
         active ? "border-primary/60 bg-accent" : "border-border hover:bg-accent/50",
       )}
     >
@@ -315,6 +340,20 @@ function CreatorCard({
             {creator.works_count} 作品 · 已下载 {creator.downloaded_count}
           </p>
         </div>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="size-7 shrink-0 text-muted-foreground hover:text-foreground"
+          title={scanning ? "扫描进行中" : "重新扫描(全量,用于补齐漏扫/无监控时拉新作品)"}
+          disabled={scanning || rescanPending}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRescan();
+          }}
+        >
+          <RotateCcw className={cn("size-3.5", (scanning || rescanPending) && "animate-spin")} />
+        </Button>
       </div>
 
       {live?.running ? (
@@ -339,6 +378,6 @@ function CreatorCard({
           )}
         </div>
       ) : null}
-    </button>
+    </div>
   );
 }

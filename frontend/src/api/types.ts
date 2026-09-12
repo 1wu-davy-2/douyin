@@ -251,6 +251,7 @@ export interface Settings {
   download_quality: string;
   scan_page_delay_ms: number;
   scan_max_empty_pages: number;
+  scan_concurrency: number;
   incremental_stop_pages: number;
   completeness_gap_threshold: number;
   sidecar_idle_timeout_minutes: number;
@@ -266,6 +267,7 @@ export interface SettingsPatch {
   download_quality?: string;
   scan_page_delay_ms?: number;
   scan_max_empty_pages?: number;
+  scan_concurrency?: number;
   incremental_stop_pages?: number;
   completeness_gap_threshold?: number;
   sidecar_idle_timeout_minutes?: number;

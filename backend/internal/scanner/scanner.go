@@ -99,7 +99,12 @@ type Scanner struct {
 	enqueuer Enqueuer
 
 	baseCtx context.Context // canceled at process shutdown
-	sem     chan struct{}   // capacity 1: global single-flight
+
+	// Scan concurrency limit is read dynamically from settings
+	// (scan_concurrency, 1-5, default 3). running is guarded by mu; waiters
+	// re-check the limit periodically via scanWakeup/timer.
+	running    int
+	scanWakeup chan struct{}
 
 	mu     sync.Mutex
 	active map[int64]*activeScan
@@ -119,9 +124,9 @@ func New(baseCtx context.Context, src ProviderSource, handle *sql.DB, bus *event
 		db:      handle,
 		bus:     bus,
 		store:   store,
-		baseCtx: baseCtx,
-		sem:     make(chan struct{}, 1),
-		active:  make(map[int64]*activeScan),
+		baseCtx:    baseCtx,
+		scanWakeup: make(chan struct{}, 1),
+		active:     make(map[int64]*activeScan),
 		sleep:   sleepCtx,
 	}
 }
@@ -129,6 +134,56 @@ func New(baseCtx context.Context, src ProviderSource, handle *sql.DB, bus *event
 // SetEnqueuer wires the download queue (stage 5 injection point). Call before
 // scans start; not safe concurrently with a running scan.
 func (s *Scanner) SetEnqueuer(e Enqueuer) { s.enqueuer = e }
+
+// scanLimit reads the configured scan concurrency (settings.scan_concurrency,
+// clamped 1-5, default 3) at call time, so a settings PATCH takes effect for
+// queued waiters without restart.
+func (s *Scanner) scanLimit() int {
+	limit := 3
+	if s.store != nil {
+		if view, err := s.store.View(s.baseCtx); err == nil && view.ScanConcurrency > 0 {
+			limit = view.ScanConcurrency
+		}
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 5 {
+		limit = 5
+	}
+	return limit
+}
+
+// acquireSlot blocks until a scan slot is available or ctx is done. Waiters
+// wake on release or on a 500ms timer (which also picks up limit changes).
+func (s *Scanner) acquireSlot(ctx context.Context) error {
+	for {
+		s.mu.Lock()
+		if s.running < s.scanLimit() {
+			s.running++
+			s.mu.Unlock()
+			return nil
+		}
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.scanWakeup:
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// releaseSlot frees a scan slot and wakes one waiter.
+func (s *Scanner) releaseSlot() {
+	s.mu.Lock()
+	s.running--
+	s.mu.Unlock()
+	select {
+	case s.scanWakeup <- struct{}{}:
+	default:
+	}
+}
 
 // Scan starts a scan run for creatorID and returns its scan id immediately
 // (the run continues in the background). trigger is "manual" or "scheduled".

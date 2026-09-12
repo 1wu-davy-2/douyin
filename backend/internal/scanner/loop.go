@@ -213,16 +213,15 @@ func (s *Scanner) execute(scanID, creatorID int64, secUID string, full bool, tri
 		Full:      full,
 	}
 
-	// Global single-flight: queue behind any other running scan.
-	select {
-	case s.sem <- struct{}{}:
-		defer func() { <-s.sem }()
-	case <-s.baseCtx.Done():
+	// Global scan concurrency (settings.scan_concurrency, 1-5): queue behind
+	// running scans; each creator additionally stays single-flight via active.
+	if err := s.acquireSlot(s.baseCtx); err != nil {
 		res.LastError = strPtr("scan canceled before start")
 		s.writeFinalRow(res)
 		s.publishDone(res)
 		return res
 	}
+	defer s.releaseSlot()
 
 	// fctx detaches from scan cancellation so finalization (scan_runs row,
 	// scan.done event, enqueue) still lands when the process is shutting down.

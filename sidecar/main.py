@@ -139,7 +139,7 @@ def mock_posts(sec_uid: str, cursor: int, count: int) -> dict[str, Any]:
             {
                 "item_id": f"mock_{pos:04d}",
                 "title": f"Mock作品 #{pos}",
-                "cover_url": f"https://mock.example/cover/{pos}.jpg",
+                "cover_url": f"/mockcdn/mock_gallery_{pos}/cover.jpg",
                 "duration": 0 if kind == "image" else 30 + (pos % 25),
                 "published_at": rfc3339(MOCK_BASE_TS - (pos - 1) * 86400),
                 "mix_id": mix_id,
@@ -226,7 +226,7 @@ def mock_work(item_id: str) -> dict[str, Any]:
             "item_id": item_id,
             "title": f"Mock作品 {item_id}",
             "type": "image",
-            "cover_url": f"https://mock.example/cover/{item_id}.jpg",
+            "cover_url": f"/mockcdn/{item_id}/cover.jpg",
             "duration": 0,
             "variants": [],
             "images": images,
@@ -236,7 +236,7 @@ def mock_work(item_id: str) -> dict[str, Any]:
         "item_id": item_id,
         "title": f"Mock作品 {item_id}",
         "type": "video",
-        "cover_url": f"https://mock.example/cover/{item_id}.jpg",
+        "cover_url": f"/mockcdn/{item_id}/cover.jpg",
         "duration": 45,
         "variants": mock_variants(item_id),
     }
@@ -542,13 +542,21 @@ class Handler(BaseHTTPRequestHandler):
             handler = _ROUTES.get(path)
             if handler is None:
                 raise SidecarError(404, "not found")
-            if path != "/health":
-                supplied = self.headers.get("X-Sidecar-Token", "")
-                # encode 成 bytes 再比较:compare_digest 对非 ASCII str 会抛 TypeError
-                if not supplied or not secrets.compare_digest(
-                    supplied.encode("utf-8"), self.token.encode("utf-8")
-                ):
-                    raise SidecarError(403, "invalid or missing sidecar token")
+            supplied = self.headers.get("X-Sidecar-Token", "")
+            # encode 成 bytes 再比较:compare_digest 对非 ASCII str 会抛 TypeError
+            matched = supplied and secrets.compare_digest(
+                supplied.encode("utf-8"), self.token.encode("utf-8")
+            )
+            if path == "/health":
+                # /health 本就允许无 token 探活;但若调用方"带了"token 却不匹配,
+                # 说明端口上挂着另一个(孤儿)侧车 —— 必须 403,让 Go 管理器的
+                # 就绪检查立即识破,而不是误把孤儿当自己(随后业务请求全部 403)。
+                if supplied and not matched:
+                    raise SidecarError(403, "invalid sidecar token (foreign sidecar on this port?)")
+            elif not matched:
+                raise SidecarError(403, "invalid or missing sidecar token")
+            if matched:
+                _SERVER_STATE["last_seen"] = time.monotonic()
             params = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
             payload = handler(self, params)
             status = 200
@@ -665,6 +673,21 @@ class ExclusiveThreadingHTTPServer(ThreadingHTTPServer):
         super().server_bind()
 
 
+_SERVER_STATE = {"last_seen": time.monotonic()}
+
+
+def _self_idle_watchdog() -> None:
+    """兜底自毁:若超过 DY_SIDECAR_SELF_IDLE_SECONDS(默认 1200s)没有任何
+    带正确 token 的请求,说明宿主 Go 进程已死或被替换 —— 孤儿侧车自行退出,
+    释放端口,避免占住 18787 让新实例的侧车无法绑定。"""
+    limit = float(os.environ.get("DY_SIDECAR_SELF_IDLE_SECONDS", "1200"))
+    while True:
+        time.sleep(15)
+        if time.monotonic() - _SERVER_STATE["last_seen"] > limit:
+            print(f"sidecar self-exit: idle > {limit:.0f}s (orphan backstop)", flush=True)
+            os._exit(0)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="抖音归档工具 v2 签名侧车")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
@@ -683,6 +706,7 @@ def main() -> None:
         f"127.0.0.1:{args.port} mode={mode} cookie_file={cookie_file_path()}",
         flush=True,
     )
+    threading.Thread(target=_self_idle_watchdog, daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
