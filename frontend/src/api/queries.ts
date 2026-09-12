@@ -90,7 +90,12 @@ export function useDownloadsSummary() {
 
 // ---------- 订阅 / 设置 ----------
 export function useSubscriptions() {
-  return useQuery({ queryKey: qk.subscriptions, queryFn: ep.listSubscriptions });
+  return useQuery({
+    queryKey: qk.subscriptions,
+    queryFn: ep.listSubscriptions,
+    // 监控统计(新收录/已下载)无 SSE 事件,30s 轮询兜底;页面不可见时 TanStack 自动暂停
+    refetchInterval: 30_000,
+  });
 }
 
 export function useSettings() {

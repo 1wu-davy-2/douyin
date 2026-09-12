@@ -163,6 +163,9 @@ interface MockSubscription {
   enabled: boolean;
   last_run_at: string | null;
   created_at: string;
+  /** 契约 v1.2:监控期间(订阅创建后)新收录的作品数,及其中已下载(succeeded)数。 */
+  new_works: number;
+  new_downloaded: number;
 }
 
 interface MockSettings {
@@ -469,7 +472,7 @@ function seed(): void {
     });
   });
 
-  // 初始订阅
+  // 初始订阅(监控期间统计给非零示例:自动下载的已下载数 > 0,未开自动下载的已下载为 0)
   state.subs.push({
     id: ++state.ids.sub,
     target_type: "creator",
@@ -481,6 +484,8 @@ function seed(): void {
     enabled: true,
     last_run_at: iso(now - 2 * 3600_000),
     created_at: iso(now - 6 * 86400_000),
+    new_works: 12,
+    new_downloaded: 9,
   });
   state.subs.push({
     id: ++state.ids.sub,
@@ -493,6 +498,8 @@ function seed(): void {
     enabled: true,
     last_run_at: iso(now - 5 * 3600_000),
     created_at: iso(now - 9 * 86400_000),
+    new_works: 4,
+    new_downloaded: 0,
   });
 
   // 初始扫描记录
@@ -856,6 +863,16 @@ function workJson(w: MockWork, latest: Map<number, MockJob>): Work {
   };
 }
 
+/** 该博主全部已下载资产的字节总和(契约 v1.2:SUM assets.size_bytes,kind video+image)。 */
+function downloadBytesOf(creatorId: number): number {
+  const workIds = new Set(state.works.filter((w) => w.creator_id === creatorId).map((w) => w.id));
+  let sum = 0;
+  for (const a of state.assets) {
+    if (workIds.has(a.work_id) && (a.kind === "video" || a.kind === "image")) sum += a.size_bytes;
+  }
+  return sum;
+}
+
 function creatorJson(c: MockCreator): Creator {
   const works = state.works.filter((w) => w.creator_id === c.id);
   const latest = latestJobByWork();
@@ -869,6 +886,7 @@ function creatorJson(c: MockCreator): Creator {
     reported_work_count: c.reported_work_count,
     works_count: works.length,
     downloaded_count: downloaded,
+    download_bytes: downloadBytesOf(c.id),
     created_at: c.created_at,
   };
 }
@@ -918,6 +936,8 @@ function subscriptionJson(s: MockSubscription): Subscription {
     last_run_at: s.last_run_at,
     next_run_at: s.enabled && lastRun ? iso(lastRun + s.interval_minutes * 60_000) : null,
     enabled: s.enabled,
+    new_works: s.new_works,
+    new_downloaded: s.new_downloaded,
   };
 }
 
@@ -980,16 +1000,33 @@ function numArray(v: unknown): number[] {
 const ok = (json: unknown): MockResponse => ({ status: 200, json });
 const err = (status: number, detail: string): MockResponse => ({ status, json: { detail } });
 
+/**
+ * works 列表契约筛选(契约 v1.2):
+ * - type:video=视频,image=图集,live=含动图/实况片段的图集(EXISTS live 资产 → live_count>0)
+ * - dl:按 dl_status(最新一条任务推导)
+ */
+function matchesTypeDl(w: MockWork, type: string, dl: string, latest: Map<number, MockJob>): boolean {
+  if (type === "video" && w.type !== "video") return false;
+  if (type === "image" && w.type !== "image") return false;
+  if (type === "live" && !(w.type === "image" && w.live_count > 0)) return false;
+  if (dl && dlStatusOf(latest.get(w.id)) !== dl) return false;
+  return true;
+}
+
 function listWorks(creatorId: number, query: URLSearchParams, forceCollectionId?: number): Page<Work> {
   const page = Math.max(1, optNum(query.get("page")) ?? 1);
   const pageSize = Math.min(100, Math.max(1, optNum(query.get("page_size")) ?? 20));
   const q = (query.get("q") ?? "").trim().toLowerCase();
   const cid = forceCollectionId ?? optNum(query.get("collection_id"));
+  const type = query.get("type") ?? "";
+  const dl = query.get("dl") ?? "";
   const sort = query.get("sort") ?? "published_at_desc";
+  const latest = latestJobByWork();
 
   let items = state.works.filter((w) => w.creator_id === creatorId);
   if (cid !== undefined) items = items.filter((w) => w.collection_id === cid);
   if (q) items = items.filter((w) => w.title.toLowerCase().includes(q) || w.item_id.toLowerCase().includes(q));
+  if (type || dl) items = items.filter((w) => matchesTypeDl(w, type, dl, latest));
   items = items.slice().sort((a, b) => {
     if (sort === "published_at_asc") return a.published_at.localeCompare(b.published_at);
     if (sort === "duration_desc") return b.duration - a.duration;
@@ -998,7 +1035,6 @@ function listWorks(creatorId: number, query: URLSearchParams, forceCollectionId?
 
   const total = items.length;
   const start = (page - 1) * pageSize;
-  const latest = latestJobByWork();
   return {
     items: items.slice(start, start + pageSize).map((w) => workJson(w, latest)),
     total,
@@ -1169,14 +1205,19 @@ export function mockRoute(req: MockRequest): MockResponse {
   }
 
   if (seg[0] === "works") {
-    if (seg[2] === "batch-ids" && method === "POST") {
+    // /works/batch-ids → seg = ["works","batch-ids"]
+    if (seg[1] === "batch-ids" && method === "POST") {
       const creatorId = num(b.creator_id, 0);
       const q = str(b.q).trim().toLowerCase();
       const cid = optNum(b.collection_id);
+      const type = str(b.type);
+      const dl = str(b.dl);
+      const latest = latestJobByWork();
       const ids = state.works
         .filter((w) => w.creator_id === creatorId)
         .filter((w) => (cid !== undefined ? w.collection_id === cid : true))
         .filter((w) => (q ? w.title.toLowerCase().includes(q) || w.item_id.toLowerCase().includes(q) : true))
+        .filter((w) => matchesTypeDl(w, type, dl, latest))
         .map((w) => w.id);
       return ok({ ids });
     }
@@ -1421,6 +1462,8 @@ export function mockRoute(req: MockRequest): MockResponse {
           enabled: true,
           last_run_at: null,
           created_at: iso(now),
+          new_works: 0,
+          new_downloaded: 0,
         };
         state.subs.push(sub);
         return { status: 201, json: subscriptionJson(sub) };

@@ -30,7 +30,9 @@ import type {
   SubscriptionPatch,
   Work,
   WorkDetail,
+  WorkDlFilter,
   WorkSort,
+  WorkTypeFilter,
 } from "./types";
 
 // ---------- 认证 ----------
@@ -71,6 +73,10 @@ export interface WorksListParams {
   page_size: number;
   q?: string;
   collection_id?: number;
+  /** 契约 v1.2:type=live 表示含动图片段的图集。 */
+  type?: WorkTypeFilter;
+  /** 契约 v1.2:按 dl_status 过滤。 */
+  dl?: WorkDlFilter;
   sort: WorkSort;
 }
 
@@ -82,6 +88,8 @@ export function listWorks(creatorId: number, params: WorksListParams): Promise<P
   });
   if (params.q) sp.set("q", params.q);
   if (params.collection_id !== undefined) sp.set("collection_id", String(params.collection_id));
+  if (params.type) sp.set("type", params.type);
+  if (params.dl) sp.set("dl", params.dl);
   return api<Page<Work>>(`/api/creators/${creatorId}/works?${sp.toString()}`);
 }
 
@@ -89,10 +97,24 @@ export function getWork(workId: number): Promise<WorkDetail> {
   return api<WorkDetail>(`/api/works/${workId}`);
 }
 
-export const batchWorkIds = (creatorId: number, filters?: { q?: string; collection_id?: number }) =>
+/** batch-ids 的筛选条件(与 works 列表完全一致,服务"按筛选全选")。 */
+export interface BatchIdsFilters {
+  q?: string;
+  collection_id?: number;
+  type?: WorkTypeFilter;
+  dl?: WorkDlFilter;
+}
+
+export const batchWorkIds = (creatorId: number, filters?: BatchIdsFilters) =>
   api<BatchIdsResult>("/api/works/batch-ids", {
     method: "POST",
-    json: { creator_id: creatorId, ...(filters?.q ? { q: filters.q } : {}), ...(filters?.collection_id !== undefined ? { collection_id: filters.collection_id } : {}) },
+    json: {
+      creator_id: creatorId,
+      ...(filters?.q ? { q: filters.q } : {}),
+      ...(filters?.collection_id !== undefined ? { collection_id: filters.collection_id } : {}),
+      ...(filters?.type ? { type: filters.type } : {}),
+      ...(filters?.dl ? { dl: filters.dl } : {}),
+    },
   });
 
 export const listWorkQualities = (workId: number) =>

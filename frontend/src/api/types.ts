@@ -10,6 +10,10 @@ export type ScanStatus = "running" | "succeeded" | "partial" | "failed";
 export type Quality = "540p" | "720p" | "1080p";
 export type WorkSort = "published_at_desc" | "published_at_asc" | "duration_desc";
 export type WorkType = "video" | "image";
+/** works 列表/batch-ids 的 type 筛选参数:live = 含动图/实况片段的图集。 */
+export type WorkTypeFilter = "video" | "image" | "live";
+/** works 列表/batch-ids 的 dl 筛选参数(按 dl_status 过滤,canceled 不在契约筛选枚举内)。 */
+export type WorkDlFilter = Exclude<DLStatus, "canceled">;
 export type AssetKind = "video" | "image" | "cover" | "metadata";
 
 export const JOB_STATUSES: readonly JobStatus[] = [
@@ -60,6 +64,8 @@ export interface Creator {
   reported_work_count: number;
   works_count: number;
   downloaded_count: number;
+  /** 契约 v1.2:该博主全部已下载资产的字节总和(SUM assets.size_bytes,kind video+image)。 */
+  download_bytes: number;
   created_at: string;
 }
 
@@ -120,6 +126,9 @@ export interface WorksQuery {
   page_size: number;
   q?: string;
   collection_id?: number;
+  /** 契约 v1.2:type=live 表示含动图片段的图集。 */
+  type?: WorkTypeFilter;
+  dl?: WorkDlFilter;
   sort: WorkSort;
 }
 
@@ -215,6 +224,9 @@ export interface Subscription {
   last_run_at: string | null;
   next_run_at: string | null;
   enabled: boolean;
+  /** 契约 v1.2:监控期间(订阅创建后)新收录的作品数,及其中已下载(succeeded)数。 */
+  new_works: number;
+  new_downloaded: number;
 }
 
 export interface SubscriptionInput {

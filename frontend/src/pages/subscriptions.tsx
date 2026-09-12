@@ -1,6 +1,6 @@
 /**
  * 监控订阅页:
- * 表格(目标/类型/间隔/自动下载/画质/上次运行/启用 Switch)+ 新建 Dialog + 删除 confirm-dialog。
+ * 表格(目标/类型/间隔/自动下载/画质/上次运行/监控期间统计/启用 Switch)+ 新建 Dialog + 删除 confirm-dialog。
  * 启用开关走乐观更新(PATCH /api/subscriptions/{id})。
  */
 import { useEffect, useState } from "react";
@@ -90,6 +90,12 @@ export function SubscriptionsPage() {
               <TableHead className="w-24">自动下载</TableHead>
               <TableHead className="w-20">画质</TableHead>
               <TableHead className="w-36">上次运行</TableHead>
+              <TableHead
+                className="w-32"
+                title="自该订阅创建起,监控扫描新收录的作品数,及其中已下载(成功)的作品数。每 30 秒自动刷新。"
+              >
+                监控期间
+              </TableHead>
               <TableHead className="w-16">启用</TableHead>
               <TableHead className="w-16 text-right">操作</TableHead>
             </TableRow>
@@ -104,13 +110,14 @@ export function SubscriptionsPage() {
                   <TableCell><Skeleton className="h-5 w-10" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-12" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-20" /></TableCell>
                   <TableCell><Skeleton className="h-5 w-9" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-8" /></TableCell>
                 </TableRow>
               ))
             ) : subs.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="p-0">
+                <TableCell colSpan={9} className="p-0">
                   <EmptyState
                     className="border-0"
                     icon={Radar}
@@ -142,6 +149,11 @@ export function SubscriptionsPage() {
                   </TableCell>
                   <TableCell className="text-muted-foreground">{sub.quality}</TableCell>
                   <TableCell className="text-xs tabular-nums text-muted-foreground">{formatDateTime(sub.last_run_at)}</TableCell>
+                  <TableCell className="text-xs tabular-nums text-muted-foreground">
+                    {sub.new_works > 0
+                      ? `新增 ${sub.new_works} · 已下载 ${sub.new_downloaded}`
+                      : "-"}
+                  </TableCell>
                   <TableCell>
                     <Switch
                       aria-label={`启用 ${sub.target_name}`}

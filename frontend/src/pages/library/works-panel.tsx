@@ -1,8 +1,8 @@
 /**
- * 作品 Tab:搜索(防抖)+ 合集筛选 + 排序 + 作品表格 + 服务端分页 + 底部下载操作栏。
+ * 作品 Tab:搜索(防抖)+ 合集/类型/下载状态筛选 + 排序 + 作品表格 + 服务端分页 + 底部下载操作栏。
  * 选中集合由 LibraryPage 持有(可跨页/跨筛选),此处只渲染与回调。
  */
-import type { Page, Quality, Work, WorkSort, Collection } from "../../api/types";
+import type { Page, Quality, Work, WorkDlFilter, WorkSort, WorkTypeFilter, Collection } from "../../api/types";
 import { QUALITIES } from "../../api/types";
 import { DlStatusBadge } from "../../components/status-badge";
 import { EmptyState } from "../../components/empty-state";
@@ -28,6 +28,12 @@ interface WorksPanelProps {
   onQChange: (q: string) => void;
   collectionId: number | null;
   onCollectionChange: (id: number | null) => void;
+  /** 契约 v1.2:type 筛选(null=全部类型;live=含动图片段的图集) */
+  type: WorkTypeFilter | null;
+  onTypeChange: (type: WorkTypeFilter | null) => void;
+  /** 契约 v1.2:dl_status 筛选(null=全部状态) */
+  dl: WorkDlFilter | null;
+  onDlChange: (dl: WorkDlFilter | null) => void;
   sort: WorkSort;
   onSortChange: (sort: WorkSort) => void;
   page: number;
@@ -57,10 +63,24 @@ const SORT_OPTIONS: { value: WorkSort; label: string }[] = [
   { value: "duration_desc", label: "时长最长" },
 ];
 
+const TYPE_OPTIONS: { value: WorkTypeFilter; label: string }[] = [
+  { value: "video", label: "视频" },
+  { value: "image", label: "图集" },
+  { value: "live", label: "动图" },
+];
+
+const DL_OPTIONS: { value: WorkDlFilter; label: string }[] = [
+  { value: "none", label: "未下载" },
+  { value: "queued", label: "排队中" },
+  { value: "downloading", label: "下载中" },
+  { value: "succeeded", label: "已下载" },
+  { value: "failed", label: "失败" },
+];
+
 export function WorksPanel(props: WorksPanelProps) {
   const {
     works, isPending, isFetching, collections,
-    q, onQChange, collectionId, onCollectionChange, sort, onSortChange,
+    q, onQChange, collectionId, onCollectionChange, type, onTypeChange, dl, onDlChange, sort, onSortChange,
     page, pageSize, onPageChange, onPageSizeChange,
     selected, pageItems, onToggleRow, onSelectPage, onClearSelection, onSelectAllFiltered, selectAllPending,
     quality, onQualityChange, onDownload, downloadPending, onPlay,
@@ -70,6 +90,7 @@ export function WorksPanel(props: WorksPanelProps) {
   const pageSelected = pageItems.filter((w) => selected.has(w.id)).length;
   const allPageSelected = pageItems.length > 0 && pageSelected === pageItems.length;
   const somePageSelected = pageSelected > 0 && !allPageSelected;
+  const hasFilter = q !== "" || collectionId !== null || type !== null || dl !== null;
 
   // 可播放列表 = 当前页已下载作品(播放器内保持列表顺序)
   const playable = pageItems.filter((w) => w.dl_status === "succeeded");
@@ -102,6 +123,38 @@ export function WorksPanel(props: WorksPanelProps) {
             {collections.map((c) => (
               <SelectItem key={c.id} value={String(c.id)}>
                 {c.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={type === null ? "all" : type}
+          onValueChange={(v) => onTypeChange(v === "all" ? null : (v as WorkTypeFilter))}
+        >
+          <SelectTrigger className="w-32" aria-label="按类型筛选">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部类型</SelectItem>
+            {TYPE_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={dl === null ? "all" : dl}
+          onValueChange={(v) => onDlChange(v === "all" ? null : (v as WorkDlFilter))}
+        >
+          <SelectTrigger className="w-32" aria-label="按下载状态筛选">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部状态</SelectItem>
+            {DL_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
               </SelectItem>
             ))}
           </SelectContent>
@@ -158,9 +211,9 @@ export function WorksPanel(props: WorksPanelProps) {
                   <EmptyState
                     icon={FileVideo}
                     className="border-0"
-                    title={q || collectionId !== null ? "没有匹配的作品" : "还没有作品"}
+                    title={hasFilter ? "没有匹配的作品" : "还没有作品"}
                     description={
-                      q || collectionId !== null
+                      hasFilter
                         ? "试试调整搜索关键词或筛选条件"
                         : "该博主还没有扫描到作品,可在左侧重新添加或等待扫描完成"
                     }

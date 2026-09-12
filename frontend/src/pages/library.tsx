@@ -1,6 +1,6 @@
 /**
  * 作品库页(核心):
- * 左列:博主卡片(头像/昵称/作品数/已下载数),SSE scan.progress 驱动扫描进度条;
+ * 左列:博主卡片(头像/昵称/作品数/已下载数/下载空间),SSE scan.progress 驱动扫描进度条;
  *       "添加博主"输入框 → POST /api/creators(202)→ scan-store 记录 → scan.done 刷新并 toast。
  * 右列:选中博主详情,Tabs(作品/合集)。
  */
@@ -10,7 +10,7 @@ import { Library as LibraryIcon, Plus, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { createCreator, rescanCreator } from "../api/endpoints";
 import { qk, useCollections, useCreators, useWorks } from "../api/queries";
-import type { Quality, WorkSort } from "../api/types";
+import type { Quality, WorkDlFilter, WorkSort, WorkTypeFilter } from "../api/types";
 import { EmptyState } from "../components/empty-state";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -20,6 +20,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { useDebouncedValue } from "../lib/use-debounced-value";
 import { getScanSnapshot, subscribeScans, type LiveScan } from "../lib/scan-store";
+import { formatBytes } from "../lib/format";
 import { openPlayer } from "../lib/player-store";
 import { batchWorkIds, createDownloads } from "../api/endpoints";
 import { cn, removeFromSet, toggleInSet, unionIntoSet } from "../lib/utils";
@@ -41,6 +42,8 @@ export function LibraryPage() {
   const [qInput, setQInput] = useState("");
   const q = useDebouncedValue(qInput, 300);
   const [collectionId, setCollectionId] = useState<number | null>(null);
+  const [workType, setWorkType] = useState<WorkTypeFilter | null>(null);
+  const [dlStatus, setDlStatus] = useState<WorkDlFilter | null>(null);
   const [sort, setSort] = useState<WorkSort>("published_at_desc");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -50,6 +53,8 @@ export function LibraryPage() {
     sort,
     q: q || undefined,
     collection_id: collectionId ?? undefined,
+    type: workType ?? undefined,
+    dl: dlStatus ?? undefined,
   });
 
   // 选择集合与画质
@@ -72,6 +77,8 @@ export function LibraryPage() {
   useEffect(() => {
     setQInput("");
     setCollectionId(null);
+    setWorkType(null);
+    setDlStatus(null);
     setSelected(new Set());
     setPage(1);
   }, [selectedCreatorId]);
@@ -79,7 +86,7 @@ export function LibraryPage() {
   // 筛选条件变化回到第 1 页
   useEffect(() => {
     setPage(1);
-  }, [q, collectionId, sort, pageSize]);
+  }, [q, collectionId, workType, dlStatus, sort, pageSize]);
 
   // 总数变少时收拢页码
   useEffect(() => {
@@ -110,6 +117,8 @@ export function LibraryPage() {
       batchWorkIds(selectedCreatorId as number, {
         q: q || undefined,
         collection_id: collectionId ?? undefined,
+        type: workType ?? undefined,
+        dl: dlStatus ?? undefined,
       }),
     onSuccess: (res) => {
       setSelected((prev) => unionIntoSet(prev, res.ids));
@@ -220,7 +229,7 @@ export function LibraryPage() {
                 <h1 className="truncate text-base font-semibold">{selectedCreator.nickname}</h1>
                 <p className="text-xs text-muted-foreground">
                   已收录 {selectedCreator.works_count} / 主页 {selectedCreator.reported_work_count} 个作品 · 已下载{" "}
-                  {selectedCreator.downloaded_count}
+                  {selectedCreator.downloaded_count} · 下载空间 {formatBytes(selectedCreator.download_bytes)}
                 </p>
               </div>
             </div>
@@ -244,6 +253,10 @@ export function LibraryPage() {
                 onQChange={setQInput}
                 collectionId={collectionId}
                 onCollectionChange={setCollectionId}
+                type={workType}
+                onTypeChange={setWorkType}
+                dl={dlStatus}
+                onDlChange={setDlStatus}
                 sort={sort}
                 onSortChange={setSort}
                 page={page}
@@ -308,7 +321,7 @@ function CreatorCard({
   onRescan,
   rescanPending,
 }: {
-  creator: { id: number; nickname: string; avatar_url: string; works_count: number; downloaded_count: number };
+  creator: { id: number; nickname: string; avatar_url: string; works_count: number; downloaded_count: number; download_bytes: number };
   active: boolean;
   live: LiveScan | undefined;
   onClick: () => void;
@@ -337,7 +350,7 @@ function CreatorCard({
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium" title={creator.nickname}>{creator.nickname}</p>
           <p className="text-[11px] text-muted-foreground">
-            {creator.works_count} 作品 · 已下载 {creator.downloaded_count}
+            {creator.works_count} 作品 · 已下载 {creator.downloaded_count} · {formatBytes(creator.download_bytes)}
           </p>
         </div>
         <Button
