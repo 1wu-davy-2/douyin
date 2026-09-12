@@ -134,15 +134,18 @@ def mock_posts(sec_uid: str, cursor: int, count: int) -> dict[str, Any]:
     for idx in range(start, end):
         pos = idx + 1
         mix_id, mix_name = mock_mix_for(pos)
+        kind, image_count = mock_kind_for(idx)
         items.append(
             {
                 "item_id": f"mock_{pos:04d}",
                 "title": f"Mock作品 #{pos}",
                 "cover_url": f"https://mock.example/cover/{pos}.jpg",
-                "duration": 30 + (pos % 25),
+                "duration": 0 if kind == "image" else 30 + (pos % 25),
                 "published_at": rfc3339(MOCK_BASE_TS - (pos - 1) * 86400),
                 "mix_id": mix_id,
                 "mix_name": mix_name,
+                "type": kind,
+                "image_count": image_count,
             }
         )
     has_more = end < MOCK_TOTAL
@@ -159,14 +162,83 @@ MOCK_WORK_VARIANTS = [
     {"quality": "540p", "width": 540, "height": 960, "bitrate": 800000, "size_bytes": 4500000},
 ]
 
+# Mock 图集尺寸(竖屏 3:4);与 Go MockProvider 保持一致
+MOCK_IMAGE_WIDTH = 1080
+MOCK_IMAGE_HEIGHT = 1440
+
+# 契约要求 video 档位携带 url(恒等于首个候选)与 urls(候选列表)。
+# mock 档位用 /mockcdn/{item}/{quality}.mp4 相对地址,与 Go MockProvider 对齐。
+def mock_variants(item_id: str) -> list[dict[str, Any]]:
+    out = []
+    for v in MOCK_WORK_VARIANTS:
+        entry = dict(v)
+        url = f"/mockcdn/{item_id}/{v['quality']}.mp4"
+        entry["url"] = url
+        entry["urls"] = [url]
+        out.append(entry)
+    return out
+
+
+def mock_kind_for(idx: int) -> tuple[str, int]:
+    """0 起全局序号 -> (type, image_count)。
+
+    每第 7 个作品(index%7==6)为图集,3-6 张图(数量=3+index%4);
+    其中 index%14==13 的再带 1 段实况(/work 层面体现,/posts 不携带)。
+    与 Go MockProvider 的 mockKindFor 逐字对齐。
+    """
+    if idx % 7 == 6:
+        return "image", 3 + idx % 4
+    return "video", 0
+
+
+def _mock_pos(item_id: str) -> int | None:
+    """mock_0007 -> 7;非 mock_NNNN 形态返回 None(视为 video 作品)。"""
+    s = str(item_id)
+    if not s.startswith("mock_"):
+        return None
+    try:
+        pos = int(s[len("mock_"):])
+    except ValueError:
+        return None
+    return pos if pos > 0 else None
+
 
 def mock_work(item_id: str) -> dict[str, Any]:
+    pos = _mock_pos(item_id)
+    idx = pos - 1 if pos is not None else -1
+    kind, image_count = mock_kind_for(idx) if idx >= 0 else ("video", 0)
+    if kind == "image":
+        images = [
+            {
+                "url": f"/mockcdn/{item_id}/img{n}.jpg",
+                "urls": [f"/mockcdn/{item_id}/img{n}.jpg"],
+                "width": MOCK_IMAGE_WIDTH,
+                "height": MOCK_IMAGE_HEIGHT,
+            }
+            for n in range(1, image_count + 1)
+        ]
+        live_videos: list[dict[str, Any]] = []
+        if idx % 14 == 13:
+            live_videos = [
+                {"url": f"/mockcdn/{item_id}/live1.mp4", "urls": [f"/mockcdn/{item_id}/live1.mp4"]}
+            ]
+        return {
+            "item_id": item_id,
+            "title": f"Mock作品 {item_id}",
+            "type": "image",
+            "cover_url": f"https://mock.example/cover/{item_id}.jpg",
+            "duration": 0,
+            "variants": [],
+            "images": images,
+            "live_videos": live_videos,
+        }
     return {
         "item_id": item_id,
         "title": f"Mock作品 {item_id}",
+        "type": "video",
         "cover_url": f"https://mock.example/cover/{item_id}.jpg",
         "duration": 45,
-        "variants": [dict(v) for v in MOCK_WORK_VARIANTS],
+        "variants": mock_variants(item_id),
     }
 
 
@@ -210,6 +282,40 @@ def _url_candidates(url_list: Any) -> list[str]:
             if s not in out:
                 out.append(s)
     return out
+
+
+def _image_entry(img: Any) -> dict[str, Any] | None:
+    """aweme.images[] 单项 -> {url, urls, width, height};无有效地址返回 None。"""
+    if not isinstance(img, dict):
+        return None
+    candidates = _url_candidates(img.get("url_list"))
+    if not candidates:
+        return None
+    try:
+        width = int(img.get("width") or 0)
+    except (TypeError, ValueError):
+        width = 0
+    try:
+        height = int(img.get("height") or 0)
+    except (TypeError, ValueError):
+        height = 0
+    return {"url": candidates[0], "urls": candidates, "width": width, "height": height}
+
+
+def _live_entry(img: Any) -> dict[str, Any] | None:
+    """图集图片上的实况/动图视频片段 -> {url, urls};来自
+    images[].video.play_addr.url_list,退化为 images[].video.url_list。"""
+    if not isinstance(img, dict):
+        return None
+    video = img.get("video")
+    if not isinstance(video, dict):
+        return None
+    candidates = _url_candidates((video.get("play_addr") or {}).get("url_list"))
+    if not candidates:
+        candidates = _url_candidates(video.get("url_list"))
+    if not candidates:
+        return None
+    return {"url": candidates[0], "urls": candidates}
 
 
 def _quiet_f2_logs() -> None:
@@ -278,15 +384,23 @@ def f2_fetch_posts(sec_uid: str, cursor: int, count: int, cookie: str) -> dict[s
         video = aweme.get("video") or {}
         mix = aweme.get("mix_info") or {}
         create_time = aweme.get("create_time")
+        raw_images = aweme.get("images") or []
+        images = [e for e in (_image_entry(i) for i in raw_images) if e]
+        is_image = bool(raw_images)  # aweme.images 非空即图集作品
+        cover_url = _first_url((video.get("origin_cover") or {}).get("url_list"))
+        if not cover_url and images:
+            cover_url = images[0]["url"]  # 图集作品退化为首图
         items.append(
             {
                 "item_id": str(aweme.get("aweme_id") or ""),
                 "title": str(aweme.get("desc") or aweme.get("caption") or ""),
-                "cover_url": _first_url((video.get("origin_cover") or {}).get("url_list")),
-                "duration": int(video.get("duration") or 0),
+                "cover_url": cover_url,
+                "duration": 0 if is_image else int(video.get("duration") or 0),
                 "published_at": rfc3339(create_time) if create_time else None,
                 "mix_id": str(mix.get("mix_id")) if mix.get("mix_id") is not None else None,
                 "mix_name": str(mix.get("mix_name")) if mix.get("mix_name") is not None else None,
+                "type": "image" if is_image else "video",
+                "image_count": len(images) if is_image else 0,
             }
         )
 
@@ -360,10 +474,28 @@ def f2_fetch_work(item_id: str, cookie: str) -> dict[str, Any]:
         # F2 _fetch_get_json 吞错返回 {} 或风控空壳 —— 必须显式报错
         raise SidecarError(502, "work: upstream returned no aweme_detail (risk control or expired cookie?)")
     video = aweme.get("video") or {}
+    raw_images = aweme.get("images") or []
+    images = [e for e in (_image_entry(i) for i in raw_images) if e]
+    live_videos = [e for e in (_live_entry(i) for i in raw_images) if e]
+    cover_url = _first_url((video.get("origin_cover") or {}).get("url_list"))
+    if raw_images:  # 图集/动图作品:无清晰度档位,逐张图片地址(按原始顺序)
+        if not cover_url and images:
+            cover_url = images[0]["url"]
+        return {
+            "item_id": str(aweme.get("aweme_id") or item_id),
+            "title": str(aweme.get("desc") or aweme.get("caption") or ""),
+            "type": "image",
+            "cover_url": cover_url,
+            "duration": 0,
+            "variants": [],
+            "images": images,
+            "live_videos": live_videos,
+        }
     return {
         "item_id": str(aweme.get("aweme_id") or item_id),
         "title": str(aweme.get("desc") or aweme.get("caption") or ""),
-        "cover_url": _first_url((video.get("origin_cover") or {}).get("url_list")),
+        "type": "video",
+        "cover_url": cover_url,
         "duration": int(video.get("duration") or 0),
         "variants": work_variants(video),
     }
