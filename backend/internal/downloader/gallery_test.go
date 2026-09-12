@@ -107,13 +107,16 @@ func TestDownloadImageGalleryLayout(t *testing.T) {
 	// Asset rows: kind=image with 4-digit sequence quality, live segment as
 	// kind=video with "live"+sequence, plus cover/metadata.
 	assets := galleryAssets(t, h, workID)
-	want := map[string]string{
-		"image\x000001":     "downloads/图集博主_MS4wLjABAAAAgallery/singles/图集_作品_ 一_/0001.jpg",
-		"image\x000002":     "downloads/图集博主_MS4wLjABAAAAgallery/singles/图集_作品_ 一_/0002.webp",
-		"image\x000003":     "downloads/图集博主_MS4wLjABAAAAgallery/singles/图集_作品_ 一_/0003.jpg",
-		"video\x00live0001": "downloads/图集博主_MS4wLjABAAAAgallery/singles/图集_作品_ 一_/live0001.mp4",
-		"cover\x00":         "downloads/图集博主_MS4wLjABAAAAgallery/singles/图集_作品_ 一_/cover.jpg",
-		"metadata\x00":      "downloads/图集博主_MS4wLjABAAAAgallery/singles/图集_作品_ 一_/metadata.json",
+	want := map[string]string{}
+	for rel, name := range map[string]string{
+		"image\x000001":     "0001.jpg",
+		"image\x000002":     "0002.webp",
+		"image\x000003":     "0003.jpg",
+		"video\x00live0001": "live0001.mp4",
+		"cover\x00":         "cover.jpg",
+		"metadata\x00":      "metadata.json",
+	} {
+		want[rel] = filepath.ToSlash(filepath.Join(dir, name))
 	}
 	for k, wpath := range want {
 		got, ok := assets[k]

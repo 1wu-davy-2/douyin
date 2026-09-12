@@ -25,7 +25,7 @@ func newFixture(t *testing.T) (*sql.DB, *Scheduler, int64) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.Migrate(handle); err != nil {
+	if err := db.Migrate(handle, t.TempDir()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	t.Cleanup(func() { handle.Close() })

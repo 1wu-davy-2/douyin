@@ -574,7 +574,8 @@ func TestImplementsScannerEnqueuer(t *testing.T) {
 }
 
 // Files land in <data>/downloads/{nickname}_{sec_uid}/{collections|singles}
-// with video/cover/metadata assets recorded as relative forward-slash paths.
+// with video/cover/metadata assets recorded as absolute forward-slash paths
+// (contract v1.3).
 func TestDownloadLayoutAndAssets(t *testing.T) {
 	h := newHarness(t)
 	h.start()
@@ -631,13 +632,13 @@ func TestDownloadLayoutAndAssets(t *testing.T) {
 	if !coverOK {
 		t.Fatal("cover asset missing")
 	}
-	if !strings.HasPrefix(videoPath, "downloads/") || strings.Contains(videoPath, `\`) {
-		t.Errorf("video asset path not data-relative/forward-slash: %q", videoPath)
+	if want := filepath.ToSlash(singlesDir); !strings.HasPrefix(videoPath, want+"/") || strings.Contains(videoPath, `\`) {
+		t.Errorf("video asset path not absolute under the default root: %q", videoPath)
 	}
-	if _, err := os.Stat(filepath.Join(h.dataDir, filepath.FromSlash(videoPath))); err != nil {
-		t.Errorf("video file missing at resolved path: %v", err)
+	if _, err := os.Stat(filepath.FromSlash(videoPath)); err != nil {
+		t.Errorf("video file missing at stored path: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(h.dataDir, filepath.FromSlash(metaPath))); err != nil {
+	if _, err := os.Stat(filepath.FromSlash(metaPath)); err != nil {
 		t.Errorf("metadata file missing: %v", err)
 	}
 }

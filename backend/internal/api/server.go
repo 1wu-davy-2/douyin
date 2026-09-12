@@ -64,6 +64,9 @@ func (s *Server) Handler() http.Handler {
 	s.registerDownloadRoutes(mux) // downloads.go
 	s.registerAssetRoutes(mux)    // assets.go
 
+	// -- v1.3: per-creator download roots ------------------------------------
+	s.registerCreatorRootRoutes(mux) // creator_roots.go
+
 	// Fake CDN for mock mode: the mock provider hands out relative
 	// /mockcdn/... URLs that the downloader resolves against this server.
 	if s.deps.Cfg.Mock {

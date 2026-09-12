@@ -219,7 +219,7 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.Migrate(database); err != nil {
+	if err := db.Migrate(database, h.dataDir); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	h.db = database

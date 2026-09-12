@@ -23,6 +23,13 @@ import (
 )
 
 func newTestServer(t *testing.T) (*httptest.Server, *events.Bus, *sql.DB) {
+	server, bus, database, _ := newTestServerWithCfg(t)
+	return server, bus, database
+}
+
+// newTestServerWithCfg is newTestServer for tests that also need the resolved
+// config (the data dir anchors default download roots and legacy paths).
+func newTestServerWithCfg(t *testing.T) (*httptest.Server, *events.Bus, *sql.DB, config.Settings) {
 	t.Helper()
 	cfg := config.Settings{DataDir: t.TempDir(), Mock: true}
 
@@ -30,7 +37,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *events.Bus, *sql.DB) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.Migrate(database); err != nil {
+	if err := db.Migrate(database, cfg.DataDir); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	t.Cleanup(func() { database.Close() })
@@ -76,7 +83,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *events.Bus, *sql.DB) {
 	if err := dl.Start(); err != nil {
 		t.Fatalf("start downloader: %v", err)
 	}
-	return server, bus, database
+	return server, bus, database, cfg
 }
 
 // setupAdmin bootstraps the admin and returns a client carrying the session.

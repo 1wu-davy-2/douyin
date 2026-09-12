@@ -17,7 +17,7 @@ func newTestStore(t *testing.T) (*Store, config.Settings) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.Migrate(handle); err != nil {
+	if err := db.Migrate(handle, t.TempDir()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	t.Cleanup(func() { handle.Close() })
@@ -150,3 +150,59 @@ func TestIdleTimeoutHook(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// Contract v1.3: the global download_root setting. Default is empty in the
+// view (meaning <data_dir>/downloads), a relative path is rejected, a valid
+// absolute path is created on disk, and an empty patch clears it back.
+func TestDownloadRootPatchValidationAndDefault(t *testing.T) {
+	store, cfg := newTestStore(t)
+	ctx := t.Context()
+
+	view, err := store.View(ctx)
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+	if view.DownloadRoot != "" {
+		t.Fatalf("default view download_root = %q, want empty", view.DownloadRoot)
+	}
+	if got := store.EffectiveDownloadRoot(ctx); got != filepath.Join(cfg.DataDir, "downloads") {
+		t.Fatalf("default effective root = %q, want %q", got, filepath.Join(cfg.DataDir, "downloads"))
+	}
+
+	// A relative path is rejected and nothing is stored.
+	if _, err := store.Apply(ctx, Patch{DownloadRoot: ptr("relative/root")}); err == nil {
+		t.Fatal("relative download_root must be rejected")
+	}
+
+	// A valid absolute path is cleaned, stored and created (nested dirs).
+	target := filepath.Join(cfg.DataDir, "media", "root")
+	if _, err := store.Apply(ctx, Patch{DownloadRoot: ptr(target)}); err != nil {
+		t.Fatalf("apply download_root: %v", err)
+	}
+	if fi, err := os.Stat(target); err != nil || !fi.IsDir() {
+		t.Fatalf("download_root %s not created: %v", target, err)
+	}
+	if view, err = store.View(ctx); err != nil {
+		t.Fatalf("view: %v", err)
+	}
+	if view.DownloadRoot != filepath.Clean(target) {
+		t.Fatalf("view download_root = %q, want %q", view.DownloadRoot, filepath.Clean(target))
+	}
+	if got := store.EffectiveDownloadRoot(ctx); got != filepath.Clean(target) {
+		t.Fatalf("effective root = %q, want %q", got, filepath.Clean(target))
+	}
+
+	// Whitespace-only clears the override back to the default.
+	if _, err := store.Apply(ctx, Patch{DownloadRoot: ptr("   ")}); err != nil {
+		t.Fatalf("clear download_root: %v", err)
+	}
+	if view, err = store.View(ctx); err != nil {
+		t.Fatalf("view: %v", err)
+	}
+	if view.DownloadRoot != "" {
+		t.Fatalf("view download_root after clear = %q, want empty", view.DownloadRoot)
+	}
+	if got := store.EffectiveDownloadRoot(ctx); got != filepath.Join(cfg.DataDir, "downloads") {
+		t.Fatalf("effective root after clear = %q, want the default", got)
+	}
+}

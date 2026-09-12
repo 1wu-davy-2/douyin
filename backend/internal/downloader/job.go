@@ -50,11 +50,13 @@ type jobRow struct {
 	Nickname     string
 	SecUID       string
 	CollectionID sql.NullInt64
+	CreatorRoot  sql.NullString // creators.download_root override (NULL = follow global)
 }
 
 const selectJob = `
 	SELECT j.id, j.work_id, j.creator_id, j.status, j.quality, j.attempts,
-	       w.item_id, w.title, w.type, c.nickname, c.sec_uid, w.collection_id
+	       w.item_id, w.title, w.type, c.nickname, c.sec_uid, w.collection_id,
+	       c.download_root
 	FROM download_jobs j
 	JOIN works w    ON w.id = j.work_id
 	LEFT JOIN creators c ON c.id = w.creator_id
@@ -64,7 +66,7 @@ func scanJob(row *sql.Row) (*jobRow, error) {
 	var j jobRow
 	var nickname, secUID sql.NullString
 	err := row.Scan(&j.ID, &j.WorkID, &j.CreatorID, &j.Status, &j.Quality, &j.Attempts,
-		&j.ItemID, &j.Title, &j.WorkType, &nickname, &secUID, &j.CollectionID)
+		&j.ItemID, &j.Title, &j.WorkType, &nickname, &secUID, &j.CollectionID, &j.CreatorRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +152,7 @@ func (d *Downloader) process(ctx context.Context, job *jobRow) {
 }
 
 // processVideoWork downloads one variant of a video work to
-// <data>/downloads/{creator}/{collections|singles}/title.mp4 and records
+// <download-root>/{creator}/{collections|singles}/title.mp4 and records
 // video/cover/metadata assets.
 func (d *Downloader) processVideoWork(ctx context.Context, job *jobRow, detail *provider.WorkDetail) {
 	// 2. Pick the variant for the requested quality.
@@ -160,8 +162,8 @@ func (d *Downloader) processVideoWork(ctx context.Context, job *jobRow, detail *
 		return
 	}
 
-	// 3. Target directory: <data_dir>/downloads/{nickname}_{sec_uid}/{collections|singles}/
-	dir := job.directory(d.dataDir)
+	// 3. Target directory: <resolved root>/{nickname}_{sec_uid}/{collections|singles}/
+	dir := job.directory(d.resolveRoot(ctx, job))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		d.failJob(ctx, job, "create directory: "+err.Error())
 		return
@@ -239,7 +241,7 @@ func (d *Downloader) processVideoWork(ctx context.Context, job *jobRow, detail *
 // processImageWork downloads an image (gallery) work into the aggregated
 // title directory
 //
-//	<data>/downloads/{creator}/{collections|singles}/{safeName(title)}/
+//	<download-root>/{creator}/{collections|singles}/{safeName(title)}/
 //
 // as 0001.jpg..000N.jpg (extension inferred from the URL) plus optional
 // live0001.mp4 live segments, a fixed cover.jpg and metadata.json. Assets:
@@ -254,7 +256,7 @@ func (d *Downloader) processImageWork(ctx context.Context, job *jobRow, detail *
 
 	// Aggregated gallery directory (one level deeper than video works).
 	// 无标题作品用 item_id 兜底,避免全部挤进 "untitled" 互相叠加序号。
-	dir := filepath.Join(job.collectionBase(d.dataDir), safeName(untitledFallback(job.Title, job.ItemID), maxTitleLength))
+	dir := filepath.Join(job.collectionBase(d.resolveRoot(ctx, job)), safeName(untitledFallback(job.Title, job.ItemID), maxTitleLength))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		d.failJob(ctx, job, "create directory: "+err.Error())
 		return
@@ -739,7 +741,7 @@ func (d *Downloader) upsertAssets(ctx context.Context, job *jobRow, f assetFiles
 			VALUES (?, 'video', ?, ?, ?, ?)
 			ON CONFLICT(work_id, kind, quality) DO UPDATE SET
 				path = excluded.path, size_bytes = excluded.size_bytes, created_at = excluded.created_at`,
-			job.WorkID, d.relPath(f.video), f.videoSize, f.quality, now); err != nil {
+			job.WorkID, d.absPath(f.video), f.videoSize, f.quality, now); err != nil {
 			return fmt.Errorf("video asset: %w", err)
 		}
 		for _, a := range []struct {
@@ -759,7 +761,7 @@ func (d *Downloader) upsertAssets(ctx context.Context, job *jobRow, f assetFiles
 			}
 			if _, err := tx.ExecContext(fctx, `
 				INSERT INTO assets (work_id, kind, path, size_bytes, quality, created_at)
-				VALUES (?, ?, ?, ?, NULL, ?)`, job.WorkID, a.kind, d.relPath(a.path), a.size, now); err != nil {
+				VALUES (?, ?, ?, ?, NULL, ?)`, job.WorkID, a.kind, d.absPath(a.path), a.size, now); err != nil {
 				return fmt.Errorf("%s asset: %w", a.kind, err)
 			}
 		}
@@ -795,7 +797,7 @@ func (d *Downloader) upsertGalleryAssets(ctx context.Context, job *jobRow, media
 			if _, err := tx.ExecContext(fctx, `
 				INSERT INTO assets (work_id, kind, path, size_bytes, quality, created_at)
 				VALUES (?, ?, ?, ?, ?, ?)`,
-				job.WorkID, m.kind, d.relPath(m.path), m.size, m.quality, now); err != nil {
+				job.WorkID, m.kind, d.absPath(m.path), m.size, m.quality, now); err != nil {
 				return fmt.Errorf("%s asset %s: %w", m.kind, m.quality, err)
 			}
 		}
@@ -816,7 +818,7 @@ func (d *Downloader) upsertGalleryAssets(ctx context.Context, job *jobRow, media
 			}
 			if _, err := tx.ExecContext(fctx, `
 				INSERT INTO assets (work_id, kind, path, size_bytes, quality, created_at)
-				VALUES (?, ?, ?, ?, NULL, ?)`, job.WorkID, a.kind, d.relPath(a.path), a.size, now); err != nil {
+				VALUES (?, ?, ?, ?, NULL, ?)`, job.WorkID, a.kind, d.absPath(a.path), a.size, now); err != nil {
 				return fmt.Errorf("%s asset: %w", a.kind, err)
 			}
 		}
@@ -826,15 +828,35 @@ func (d *Downloader) upsertGalleryAssets(ctx context.Context, job *jobRow, media
 
 // ------------------------------------------------------------------ paths --
 
-// directory renders <dataDir>/downloads/{nickname}_{sec_uid}/{collections|singles}.
-func (j *jobRow) directory(dataDir string) string {
-	return j.collectionBase(dataDir)
+// resolveRoot picks the download root for a job (contract v1.3 priority):
+// the creator's own download_root override, else the global
+// settings.download_root, else the default <data_dir>/downloads. The global
+// value is read live per job (same pattern as the cookie hot-reload), so a
+// settings change applies to the next job without a restart.
+func (d *Downloader) resolveRoot(ctx context.Context, job *jobRow) string {
+	if job.CreatorRoot.Valid {
+		if root := strings.TrimSpace(job.CreatorRoot.String); root != "" {
+			return root
+		}
+	}
+	if d.store != nil {
+		if root := d.store.DownloadRoot(ctx); root != "" {
+			return root
+		}
+	}
+	return filepath.Join(d.dataDir, "downloads")
+}
+
+// directory renders <root>/{nickname}_{sec_uid}/{collections|singles}. root
+// is the resolved download root (see resolveRoot).
+func (j *jobRow) directory(root string) string {
+	return j.collectionBase(root)
 }
 
 // collectionBase renders the per-creator bucket directory
-// <dataDir>/downloads/{nickname}_{sec_uid}/{collections|singles}; image works
-// append one more segment (safeName(title)) to aggregate the gallery.
-func (j *jobRow) collectionBase(dataDir string) string {
+// <root>/{nickname}_{sec_uid}/{collections|singles}; image works append one
+// more segment (safeName(title)) to aggregate the gallery.
+func (j *jobRow) collectionBase(root string) string {
 	sub := "singles"
 	if j.CollectionID.Valid {
 		sub = "collections"
@@ -847,20 +869,14 @@ func (j *jobRow) collectionBase(dataDir string) string {
 	if sec == "" {
 		sec = "nosec"
 	}
-	return filepath.Join(dataDir, "downloads", nick+"_"+sec, sub)
+	return filepath.Join(root, nick+"_"+sec, sub)
 }
 
-// relPath converts an absolute path under the data dir to a portable
-// forward-slash relative path (stored in assets.path).
-func (d *Downloader) relPath(full string) string {
-	prefix := d.dataDir
-	if prefix != "" {
-		if rel, err := filepath.Rel(prefix, full); err == nil &&
-			rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return filepath.ToSlash(rel)
-		}
-	}
-	return filepath.ToSlash(full)
+// absPath renders a produced file path as the stored assets.path value
+// (contract v1.3): absolute, forward slashes, so playback and the
+// move-downloads endpoint no longer depend on the data dir staying put.
+func (d *Downloader) absPath(full string) string {
+	return filepath.ToSlash(filepath.Clean(full))
 }
 
 // maxNameLength/maxTitleLength cap path segments against Windows MAX_PATH.

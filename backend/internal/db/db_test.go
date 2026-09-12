@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -20,10 +21,10 @@ func openTestDB(t *testing.T) *sql.DB {
 func TestMigrateIdempotent(t *testing.T) {
 	handle := openTestDB(t)
 
-	if err := Migrate(handle); err != nil {
+	if err := Migrate(handle, t.TempDir()); err != nil {
 		t.Fatalf("first migrate: %v", err)
 	}
-	if err := Migrate(handle); err != nil {
+	if err := Migrate(handle, t.TempDir()); err != nil {
 		t.Fatalf("second migrate (must be a no-op): %v", err)
 	}
 
@@ -31,8 +32,8 @@ func TestMigrateIdempotent(t *testing.T) {
 	if err := handle.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != 2 {
-		t.Fatalf("user_version = %d, want 2", version)
+	if version != 3 {
+		t.Fatalf("user_version = %d, want 3", version)
 	}
 }
 
@@ -40,10 +41,10 @@ func TestMigrateIdempotent(t *testing.T) {
 // rows and accepts 'image' for gallery works.
 func TestMigrateWorkType(t *testing.T) {
 	handle := openTestDB(t)
-	if err := Migrate(handle); err != nil {
+	if err := Migrate(handle, t.TempDir()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if err := Migrate(handle); err != nil {
+	if err := Migrate(handle, t.TempDir()); err != nil {
 		t.Fatalf("re-migrate (must be a no-op): %v", err)
 	}
 
@@ -82,7 +83,7 @@ func TestMigrateWorkType(t *testing.T) {
 
 func TestMigrateSchema(t *testing.T) {
 	handle := openTestDB(t)
-	if err := Migrate(handle); err != nil {
+	if err := Migrate(handle, t.TempDir()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
@@ -151,7 +152,7 @@ func TestMigrateSchema(t *testing.T) {
 
 func TestWithTxRollback(t *testing.T) {
 	handle := openTestDB(t)
-	if err := Migrate(handle); err != nil {
+	if err := Migrate(handle, t.TempDir()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
@@ -185,10 +186,149 @@ func TestWithTxRollback(t *testing.T) {
 
 func TestVacuum(t *testing.T) {
 	handle := openTestDB(t)
-	if err := Migrate(handle); err != nil {
+	if err := Migrate(handle, t.TempDir()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	if err := Vacuum(handle); err != nil {
 		t.Fatalf("vacuum: %v", err)
+	}
+}
+
+// ------------------------------------------------------ migration 0003 ----
+
+// seedV2 builds a pre-v3 database by replaying only migrations 0001+0002 —
+// the exact shape a v1.2 installation has on disk before the upgrade.
+func seedV2(t *testing.T) (*sql.DB, string) {
+	t.Helper()
+	dir := t.TempDir()
+	handle, err := Open(filepath.Join(dir, "v2.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { handle.Close() })
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		if err := WithTx(ctx, handle, func(tx *sql.Tx) error {
+			if _, err := tx.Exec(migrations[i]); err != nil {
+				return err
+			}
+			_, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", i+1))
+			return err
+		}); err != nil {
+			t.Fatalf("seed user_version v%d: %v", i+1, err)
+		}
+	}
+	return handle, dir
+}
+
+// Migration 0003 Go step: relative assets.path values get the data dir
+// prefixed (absolute, forward slashes); already-absolute rows (drive letter
+// or UNC) are left untouched, which keeps the step idempotent. The legacy
+// junction corpus ("downloads/legacy/...") is absolutized too — it keeps
+// resolving through the junction, now as an absolute path.
+func TestMigrate0003AbsolutizesRelativeAssetPaths(t *testing.T) {
+	handle, dir := seedV2(t)
+	ctx := context.Background()
+
+	mustExec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := handle.ExecContext(ctx, q, args...); err != nil {
+			t.Fatalf("exec %s: %v", q, err)
+		}
+	}
+	mustExec(`INSERT INTO creators(id, sec_uid, nickname, created_at) VALUES (1, 'secA', 'A', '2026-01-01T00:00:00Z')`)
+	mustExec(`INSERT INTO works(id, creator_id, item_id, created_at, updated_at)
+		  VALUES (1, 1, 'item1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
+	mustExec(`INSERT INTO works(id, creator_id, item_id, created_at, updated_at)
+		  VALUES (2, 1, 'item2', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
+	insertAsset := func(workID int64, kind, path string, quality sql.NullString) {
+		t.Helper()
+		mustExec(`INSERT INTO assets (work_id, kind, path, size_bytes, quality, created_at)
+			  VALUES (?, ?, ?, 1, ?, '2026-01-01T00:00:00Z')`, workID, kind, path, quality)
+	}
+	video1080 := sql.NullString{String: "1080p", Valid: true}
+	video720 := sql.NullString{String: "720p", Valid: true}
+	insertAsset(1, "video", "downloads/UP主_secsA/singles/a.mp4", video1080)
+	insertAsset(1, "metadata", "downloads/UP主_secsA/singles/a.metadata.json", sql.NullString{})
+	insertAsset(2, "cover", "downloads/legacy/old/cover.jpg", sql.NullString{}) // legacy junction corpus
+	insertAsset(2, "video", "E:/elsewhere/abs.mp4", video1080)                  // absolute: untouched
+	insertAsset(2, "video", `\\server/share/unc.mp4`, video720)                 // UNC: untouched
+
+	if err := Migrate(handle, dir); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	prefix := filepath.ToSlash(filepath.Clean(dir)) + "/"
+	want := map[string]string{
+		"a.mp4":           prefix + "downloads/UP主_secsA/singles/a.mp4",
+		"a.metadata.json": prefix + "downloads/UP主_secsA/singles/a.metadata.json",
+		"cover.jpg":       prefix + "downloads/legacy/old/cover.jpg",
+		"abs.mp4":         "E:/elsewhere/abs.mp4",
+		"unc.mp4":         `\\server/share/unc.mp4`,
+	}
+	assets := map[string]string{}
+	rows, err := handle.QueryContext(ctx, `SELECT path FROM assets`)
+	if err != nil {
+		t.Fatalf("list assets: %v", err)
+	}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			t.Fatal(err)
+		}
+		assets[filepath.Base(p)] = p
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(assets) != len(want) {
+		t.Fatalf("assets = %v, want %d rows", assets, len(want))
+	}
+	for base, abs := range want {
+		if assets[base] != abs {
+			t.Errorf("asset %s path = %q, want %q", base, assets[base], abs)
+		}
+	}
+
+	// creators.download_root exists and defaults to NULL.
+	var root any
+	if err := handle.QueryRow(`SELECT download_root FROM creators WHERE id = 1`).Scan(&root); err != nil {
+		t.Fatalf("read creators.download_root: %v", err)
+	}
+	if root != nil {
+		t.Errorf("download_root default = %v, want NULL", root)
+	}
+
+	// Idempotent: re-running changes nothing (already-absolute rows stay).
+	if err := Migrate(handle, dir); err != nil {
+		t.Fatalf("re-migrate: %v", err)
+	}
+	for base, abs := range want {
+		var got string
+		if err := handle.QueryRow(`SELECT path FROM assets WHERE path = ?`, abs).Scan(&got); err != nil {
+			t.Errorf("post-re-migrate asset %s missing: %v", base, err)
+		}
+	}
+}
+
+// The Go step of 0003 needs the data dir; without it the whole version step
+// (schema change + data rewrite + user_version) must roll back atomically.
+func TestMigrate0003RequiresDataDir(t *testing.T) {
+	handle, _ := seedV2(t)
+
+	if err := Migrate(handle, ""); err == nil {
+		t.Fatal("migrate without data dir must fail on pending v3")
+	}
+	var version int
+	if err := handle.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 2 {
+		t.Fatalf("user_version = %d after failed migrate, want 2 (rolled back)", version)
+	}
+	// The ALTER TABLE from the rolled-back step must not have stuck.
+	if _, err := handle.Exec(`SELECT download_root FROM creators LIMIT 1`); err == nil {
+		t.Fatal("creators.download_root exists after a rolled-back migration")
 	}
 }

@@ -84,11 +84,14 @@ var (
 
 // Deps wires the downloader.
 type Deps struct {
-	DB      *sql.DB
-	Bus     *events.Bus
-	Store   *settings.Store
-	Source  ProviderSource
-	DataDir string // downloads land in <DataDir>/downloads/...
+	DB     *sql.DB
+	Bus    *events.Bus
+	Store  *settings.Store
+	Source ProviderSource
+	// DataDir anchors the DEFAULT download root <DataDir>/downloads (contract
+	// v1.3): the creator-level creators.download_root override and the global
+	// settings.download_root take precedence over it.
+	DataDir string
 	// BaseURL is the absolute http base used to resolve relative (mock) media
 	// URLs such as "/mockcdn/{item}/{quality}.mp4". Empty leaves them as-is.
 	BaseURL string

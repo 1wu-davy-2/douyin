@@ -206,7 +206,7 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 		return rep, err
 	}
 	defer target.Close()
-	if err := db.Migrate(target); err != nil {
+	if err := db.Migrate(target, opts.DataDir); err != nil {
 		return rep, fmt.Errorf("migrate target schema: %w", err)
 	}
 

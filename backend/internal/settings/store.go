@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"douyin/backend/internal/config"
@@ -74,6 +75,54 @@ func (s *Store) CookieFilePath() string {
 	return filepath.Join(s.cfg.DataDir, ".cookie")
 }
 
+// -------------------------------------------------------------------- roots --
+
+// ValidateDownloadRoot normalizes a user-supplied download root: whitespace is
+// trimmed, an empty value collapses to "" (= default <data_dir>/downloads),
+// anything else must be an absolute path and is created eagerly (MkdirAll) so
+// a typo surfaces at save time. The returned value is the cleaned path.
+func ValidateDownloadRoot(raw string) (string, error) {
+	root := strings.TrimSpace(raw)
+	if root == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(root) {
+		return "", fmt.Errorf("settings: download_root %q must be an absolute path", root)
+	}
+	root = filepath.Clean(root)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", fmt.Errorf("settings: create download_root %s: %w", root, err)
+	}
+	return root, nil
+}
+
+// DownloadRoot returns the stored global download_root override ("" when the
+// default applies). Read live on every call — same contract as the cookie: a
+// settings change takes effect for the next download without a restart.
+func (s *Store) DownloadRoot(ctx context.Context) string {
+	values, err := s.raw(ctx)
+	if err != nil {
+		log.Printf("[settings] read download_root: %v", err)
+		return ""
+	}
+	return strings.TrimSpace(decodeString(values["download_root"]))
+}
+
+// DefaultDownloadsRoot is the fallback root when neither the creator nor the
+// global setting defines one: <data_dir>/downloads.
+func (s *Store) DefaultDownloadsRoot() string {
+	return filepath.Join(s.cfg.DataDir, "downloads")
+}
+
+// EffectiveDownloadRoot resolves the global download root: the stored
+// download_root when set, else <data_dir>/downloads.
+func (s *Store) EffectiveDownloadRoot(ctx context.Context) string {
+	if root := s.DownloadRoot(ctx); root != "" {
+		return root
+	}
+	return s.DefaultDownloadsRoot()
+}
+
 // raw returns the stored values keyed by setting key (values are JSON
 // strings). Missing rows simply don't appear in the map.
 func (s *Store) raw(ctx context.Context) (map[string]string, error) {
@@ -126,6 +175,7 @@ type SMTPView struct {
 type View struct {
 	ProviderMode             string   `json:"provider_mode"`
 	Cookie                   string   `json:"cookie"`
+	DownloadRoot             string   `json:"download_root"`
 	DownloadConcurrency      int      `json:"download_concurrency"`
 	DownloadQuality          string   `json:"download_quality"`
 	ScanPageDelayMs          int      `json:"scan_page_delay_ms"`
@@ -193,6 +243,9 @@ func (s *Store) View(ctx context.Context) (View, error) {
 	case ModeSidecar, ModeMock:
 		v.ProviderMode = decodeString(values["provider_mode"])
 	}
+	if root := decodeString(values["download_root"]); root != "" {
+		v.DownloadRoot = root
+	}
 	if n := decodeInt(values["download_concurrency"]); n > 0 {
 		v.DownloadConcurrency = n
 	}
@@ -245,6 +298,7 @@ func (s *Store) SMTPSettings(ctx context.Context) SMTP {
 type Patch struct {
 	ProviderMode             *string    `json:"provider_mode"`
 	Cookie                   *string    `json:"cookie"`
+	DownloadRoot             *string    `json:"download_root"`
 	DownloadConcurrency      *int       `json:"download_concurrency"`
 	DownloadQuality          *string    `json:"download_quality"`
 	ScanPageDelayMs          *int       `json:"scan_page_delay_ms"`
@@ -284,6 +338,16 @@ func (s *Store) Apply(ctx context.Context, patch Patch) (bool, error) {
 		default:
 			return false, fmt.Errorf("settings: invalid provider_mode %q (auto|sidecar|mock)", *patch.ProviderMode)
 		}
+	}
+	if patch.DownloadRoot != nil {
+		// Contract v1.3: absolute path, empty string clears back to the
+		// default <data_dir>/downloads. The directory is created eagerly so a
+		// bad path surfaces at save time, not on the first download.
+		root, rerr := ValidateDownloadRoot(*patch.DownloadRoot)
+		if rerr != nil {
+			return false, rerr
+		}
+		updates["download_root"] = mustJSON(root)
 	}
 	if patch.DownloadConcurrency != nil {
 		if *patch.DownloadConcurrency < 1 || *patch.DownloadConcurrency > 8 {

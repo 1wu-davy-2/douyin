@@ -96,7 +96,7 @@ func run(ctx context.Context, cfg config.Settings) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer database.Close() // second close is a no-op; first runs at shutdown
-	if err := db.Migrate(database); err != nil {
+	if err := db.Migrate(database, cfg.DataDir); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
 
