@@ -26,8 +26,8 @@ interface WorksPanelProps {
   /** 筛选/排序/分页(受控,状态在 LibraryPage,切 Tab 不丢) */
   q: string;
   onQChange: (q: string) => void;
-  collectionId: number | null;
-  onCollectionChange: (id: number | null) => void;
+  collectionId: number | null | "none";
+  onCollectionChange: (id: number | null | "none") => void;
   /** 契约 v1.2:type 筛选(null=全部类型;live=含动图片段的图集) */
   type: WorkTypeFilter | null;
   onTypeChange: (type: WorkTypeFilter | null) => void;
@@ -118,8 +118,10 @@ export function WorksPanel(props: WorksPanelProps) {
           />
         </div>
         <Select
-          value={collectionId === null ? "all" : String(collectionId)}
-          onValueChange={(v) => onCollectionChange(v === "all" ? null : Number(v))}
+          value={collectionId === null ? "all" : collectionId === "none" ? "none" : String(collectionId)}
+          onValueChange={(v) =>
+            onCollectionChange(v === "all" ? null : v === "none" ? "none" : Number(v))
+          }
         >
           <SelectTrigger className="w-44" aria-label="按合集筛选">
             <ListFilter className="size-3.5 text-muted-foreground" />
@@ -127,6 +129,7 @@ export function WorksPanel(props: WorksPanelProps) {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">全部合集</SelectItem>
+            <SelectItem value="none">单发作品(排除合集)</SelectItem>
             {collections.map((c) => (
               <SelectItem key={c.id} value={String(c.id)}>
                 {c.name}

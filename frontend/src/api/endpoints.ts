@@ -90,6 +90,7 @@ export interface WorksListParams {
   page_size: number;
   q?: string;
   collection_id?: number;
+  collection_none?: boolean;
   /** 契约 v1.2:type=live 表示含动图片段的图集。 */
   type?: WorkTypeFilter;
   /** 契约 v1.2:按 dl_status 过滤。 */
@@ -104,7 +105,11 @@ export function listWorks(creatorId: number, params: WorksListParams): Promise<P
     sort: params.sort,
   });
   if (params.q) sp.set("q", params.q);
-  if (params.collection_id !== undefined) sp.set("collection_id", String(params.collection_id));
+  if (params.collection_none) {
+    sp.set("collection_id", "none");
+  } else if (params.collection_id !== undefined) {
+    sp.set("collection_id", String(params.collection_id));
+  }
   if (params.type) sp.set("type", params.type);
   if (params.dl) sp.set("dl", params.dl);
   return api<Page<Work>>(`/api/creators/${creatorId}/works?${sp.toString()}`);
@@ -116,6 +121,7 @@ export function getWork(workId: number): Promise<WorkDetail> {
 
 /** batch-ids 的筛选条件(与 works 列表完全一致,服务"按筛选全选")。 */
 export interface BatchIdsFilters {
+  collection_none?: boolean;
   q?: string;
   collection_id?: number;
   type?: WorkTypeFilter;

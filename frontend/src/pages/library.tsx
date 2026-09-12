@@ -53,7 +53,7 @@ export function LibraryPage() {
   const [tab, setTab] = useState<TabKey>("works");
   const [qInput, setQInput] = useState("");
   const q = useDebouncedValue(qInput, 300);
-  const [collectionId, setCollectionId] = useState<number | null>(null);
+  const [collectionId, setCollectionId] = useState<number | null | "none">(null);
   const [workType, setWorkType] = useState<WorkTypeFilter | null>(null);
   const [dlStatus, setDlStatus] = useState<WorkDlFilter | null>(null);
   const [sort, setSort] = useState<WorkSort>("published_at_desc");
@@ -64,7 +64,8 @@ export function LibraryPage() {
     page_size: pageSize,
     sort,
     q: q || undefined,
-    collection_id: collectionId ?? undefined,
+    collection_id: collectionId === "none" ? undefined : collectionId ?? undefined,
+    collection_none: collectionId === "none" || undefined,
     type: workType ?? undefined,
     dl: dlStatus ?? undefined,
   });
@@ -130,7 +131,8 @@ export function LibraryPage() {
     mutationFn: () =>
       batchWorkIds(selectedCreatorId as number, {
         q: q || undefined,
-        collection_id: collectionId ?? undefined,
+        collection_id: collectionId === "none" ? undefined : collectionId ?? undefined,
+        collection_none: collectionId === "none" || undefined,
         type: workType ?? undefined,
         dl: dlStatus ?? undefined,
       }),

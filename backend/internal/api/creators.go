@@ -415,6 +415,9 @@ type workPage struct {
 type workFilter struct {
 	creatorID    int64
 	collectionID *int64
+	// collectionNone: 只看单发作品(collection_id IS NULL,即排除合集)。
+	// 与 collectionID 互斥;由 collection_id=none 参数设置。
+	collectionNone bool
 	q            string
 	workType     string // video | image | live; any other value is ignored
 	dl           string // none | queued | downloading | succeeded | failed; ignored otherwise
@@ -433,7 +436,9 @@ func (f workFilter) where() (string, []any) {
 		where += ` AND w.creator_id = ?`
 		args = append(args, f.creatorID)
 	}
-	if f.collectionID != nil {
+	if f.collectionNone {
+		where += ` AND w.collection_id IS NULL`
+	} else if f.collectionID != nil {
 		where += ` AND w.collection_id = ?`
 		args = append(args, *f.collectionID)
 	}
@@ -629,12 +634,16 @@ func (s *Server) handleCreatorWorks(w http.ResponseWriter, r *http.Request) {
 	}
 	f := workFilter{creatorID: id}
 	if raw := strings.TrimSpace(r.URL.Query().Get("collection_id")); raw != "" {
-		cid, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid collection_id")
-			return
+		if raw == "none" {
+			f.collectionNone = true // 单发作品:排除合集
+		} else {
+			cid, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid collection_id")
+				return
+			}
+			f.collectionID = &cid
 		}
-		f.collectionID = &cid
 	}
 	f.q = strings.TrimSpace(r.URL.Query().Get("q"))
 	s.serveWorkList(w, r, f)
@@ -798,11 +807,12 @@ type jobSummary struct {
 // exact same construction as the works lists (workFilter).
 func (s *Server) handleBatchWorkIDs(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		CreatorID    int64   `json:"creator_id"`
-		Q            *string `json:"q"`
-		CollectionID *int64  `json:"collection_id"`
-		Type         *string `json:"type"`
-		Dl           *string `json:"dl"`
+		CreatorID      int64   `json:"creator_id"`
+		Q              *string `json:"q"`
+		CollectionID   *int64  `json:"collection_id"`
+		CollectionNone bool    `json:"collection_none"`
+		Type           *string `json:"type"`
+		Dl             *string `json:"dl"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -815,7 +825,7 @@ func (s *Server) handleBatchWorkIDs(w http.ResponseWriter, r *http.Request) {
 		writeCreatorExistsError(w, err)
 		return
 	}
-	f := workFilter{creatorID: body.CreatorID, collectionID: body.CollectionID}
+	f := workFilter{creatorID: body.CreatorID, collectionID: body.CollectionID, collectionNone: body.CollectionNone}
 	if body.Q != nil {
 		f.q = strings.TrimSpace(*body.Q)
 	}

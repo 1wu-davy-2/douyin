@@ -167,6 +167,8 @@ export interface WorksQuery {
   page_size: number;
   q?: string;
   collection_id?: number;
+  /** "none" = 只看单发作品(排除合集) */
+  collection_none?: boolean;
   /** 契约 v1.2:type=live 表示含动图片段的图集。 */
   type?: WorkTypeFilter;
   dl?: WorkDlFilter;
