@@ -39,6 +39,8 @@
 | GET | `/api/creators` | → `[{id, sec_uid, nickname, avatar_url, profile_url, reported_work_count, works_count, downloaded_count, download_bytes, created_at}]`(按 created_at desc);`download_bytes` = 该博主全部已下载资产的字节总和(SUM assets.size_bytes,kind video+image) |
 | GET | `/api/creators/{id}` | 单个详情,字段同上 + `last_scan: {id, status, pages, new_count, updated_count, empty_pages, completeness, started_at, finished_at, last_error}` |
 | DELETE | `/api/creators/{id}` | 删除博主及其作品/合集/任务记录(不删已下载文件) |
+| PATCH | `/api/creators/{id}/download-root` | `{path: string\|null}` 设置该博主独立下载根目录( null=跟随全局);须为绝对路径,自动创建;→ `{ok, download_root}` |
+| POST | `/api/creators/{id}/move-downloads` | `{target_root: string}` 把该博主已下载文件整体移动到新根(保持相对结构;跨盘=复制+校验+删源;该博主存在 downloading 任务时 409)→ `{moved_files, moved_bytes, failed_files:[{path,error}]}` |
 | POST | `/api/creators/{id}/rescan` | `{full?:bool}` → 202 `{scan_id}`;full=true 全量,默认增量 |
 | GET | `/api/creators/{id}/collections` | → `[{id, mix_id, name, cover_url, works_count, downloaded_count}]` |
 | GET | `/api/creators/{id}/works` | `?page=&page_size=&q=&collection_id=&sort=published_at_desc\|published_at_asc\|duration_desc&type=video\|image\|live&dl=none\|queued\|downloading\|succeeded\|failed` → 分页作品。`type=live` 表示含动图片段的图集(EXISTS live 资产);`dl` 按 dl_status 过滤。item 字段见下 |
@@ -117,10 +119,12 @@ job 字段:
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/settings` | → 全部运行时设置(敏感值打码:`cookie` 只回前 8 字符 + `...`) |
-| PATCH | `/api/settings` | 部分更新;字段见下;`cookie` 变更后自动重载 provider |
+| PATCH | `/api/settings` | 部分更新;字段见下;`cookie` 变更后自动重载 provider;`download_root`(绝对路径,空=默认 `<data_dir>/downloads`)保存时自动创建目录,新下载即落入该根;**历史资产的绝对路径不受影响** |
 | POST | `/api/notifications/test` | 发测试邮件 → `{ok, error?}` |
 
-设置字段:`provider_mode(auto|sidecar|mock)`, `cookie(string)`, `download_concurrency(1-8)`, `download_quality(默认画质)`, `scan_page_delay_ms(1000-10000)`, `scan_max_empty_pages(1-10)`, `incremental_stop_pages(1-10)`, `completeness_gap_threshold(1-50)`, `sidecar_idle_timeout_minutes`, `smtp(host,port,username,password,from,to)`, `notify_on_new_work(bool)`, `notify_on_failure(bool)`。
+设置字段:`provider_mode(auto|sidecar|mock)`, `cookie(string)`, `download_root(string,绝对路径,空=默认)`, `download_concurrency(1-8)`, `download_quality(默认画质)`, `scan_page_delay_ms(1000-10000)`, `scan_max_empty_pages(1-10)`, `incremental_stop_pages(1-10)`, `completeness_gap_threshold(1-50)`, `scan_concurrency(1-5)`, `sidecar_idle_timeout_minutes`, `smtp(host,port,username,password,from,to)`, `notify_on_new_work(bool)`, `notify_on_failure(bool)`。
+
+**存储路径规则(契约 v1.3)**:assets.path 一律为**绝对路径**(migration 0003 会把存量相对路径用 data_dir 补全为绝对路径);下载目标根 = 该博主 `download_root`(若设置)→ 全局 `download_root`(若设置)→ `<data_dir>/downloads`;资产播放端点对绝对路径直接服务,对历史相对路径按 data_dir 回退拼接。
 
 ## SSE 事件流(替代轮询)
 
