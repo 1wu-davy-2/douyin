@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"douyin/backend/internal/db"
 	"douyin/backend/internal/downloader"
 	"douyin/backend/internal/events"
+	"douyin/backend/internal/legacy"
 	"douyin/backend/internal/provider"
 	"douyin/backend/internal/scanner"
 	"douyin/backend/internal/scheduler"
@@ -33,13 +35,41 @@ import (
 	"douyin/backend/internal/sidecar"
 )
 
+// modeArg scans the raw argument list for -mode/--mode (space or = form) and
+// returns its value, or "" when absent. Needed because import-legacy's own
+// flags must not reach the server's flag.Parse.
+func modeArg(args []string) string {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "-mode" || a == "--mode" {
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+			return ""
+		}
+		if v, ok := strings.CutPrefix(a, "-mode="); ok {
+			return v
+		}
+		if v, ok := strings.CutPrefix(a, "--mode="); ok {
+			return v
+		}
+	}
+	return ""
+}
+
 func main() {
-	// -mode is parsed first: import-legacy is not part of stage 1.
-	mode := flag.String("mode", "", "special run mode (import-legacy: not implemented yet)")
+	// -mode import-legacy dispatches to the migration tool (stage 7). It must
+	// be detected before flag.Parse: the tool has its own flag set and its
+	// flags (-legacy-db, -db-path, ...) are not defined here.
+	if modeArg(os.Args[1:]) == "import-legacy" {
+		os.Exit(legacy.Main(os.Args[1:]))
+	}
+
+	mode := flag.String("mode", "", "special run mode (only import-legacy is supported)")
 	flag.Parse()
 	if *mode != "" {
-		fmt.Println("not implemented yet")
-		os.Exit(0)
+		fmt.Fprintf(os.Stderr, "unknown run mode %q (supported: import-legacy)\n", *mode)
+		os.Exit(2)
 	}
 
 	log.SetFlags(log.LstdFlags)
