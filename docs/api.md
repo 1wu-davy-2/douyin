@@ -36,14 +36,14 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/api/creators` | `{profile_url}` → **202** `{creator_id, scan_id}`(异步扫描,SSE 报进度)。URL 支持主页链接或 sec_uid。重复添加返回已有 creator 并同样触发扫描 |
-| GET | `/api/creators` | → `[{id, sec_uid, nickname, avatar_url, profile_url, reported_work_count, works_count, downloaded_count, created_at}]`(按 created_at desc) |
+| GET | `/api/creators` | → `[{id, sec_uid, nickname, avatar_url, profile_url, reported_work_count, works_count, downloaded_count, download_bytes, created_at}]`(按 created_at desc);`download_bytes` = 该博主全部已下载资产的字节总和(SUM assets.size_bytes,kind video+image) |
 | GET | `/api/creators/{id}` | 单个详情,字段同上 + `last_scan: {id, status, pages, new_count, updated_count, empty_pages, completeness, started_at, finished_at, last_error}` |
 | DELETE | `/api/creators/{id}` | 删除博主及其作品/合集/任务记录(不删已下载文件) |
 | POST | `/api/creators/{id}/rescan` | `{full?:bool}` → 202 `{scan_id}`;full=true 全量,默认增量 |
 | GET | `/api/creators/{id}/collections` | → `[{id, mix_id, name, cover_url, works_count, downloaded_count}]` |
-| GET | `/api/creators/{id}/works` | `?page=&page_size=&q=&collection_id=&sort=published_at_desc\|published_at_asc\|duration_desc` → 分页作品。item 字段见下 |
+| GET | `/api/creators/{id}/works` | `?page=&page_size=&q=&collection_id=&sort=published_at_desc\|published_at_asc\|duration_desc&type=video\|image\|live&dl=none\|queued\|downloading\|succeeded\|failed` → 分页作品。`type=live` 表示含动图片段的图集(EXISTS live 资产);`dl` 按 dl_status 过滤。item 字段见下 |
 | GET | `/api/works/{id}` | 单作品详情(含 `mix_info`、`asset` 已下载资产列表、`last_job` 最新任务摘要) |
-| POST | `/api/works/batch-ids` | `{creator_id, q?, collection_id?}` → `{ids:[int]}`(**仅 id**,服务"按筛选全选") |
+| POST | `/api/works/batch-ids` | `{creator_id, q?, collection_id?, type?, dl?}` → `{ids:[int]}`(**仅 id**,服务"按筛选全选";筛选条件与 works 列表完全一致) |
 | GET | `/api/works/{id}/qualities` | 实时解析清晰度 → `[{quality:"540p"\|"720p"\|"1080p", width, height, bitrate, size_bytes}]`(需侧车在线;离线 503) |
 
 work item 字段(白名单,列表用):
@@ -105,7 +105,7 @@ job 字段:
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/subscriptions` | → `[{id, target_type, creator_id, collection_id?, creator_nickname, target_name, interval_minutes, auto_download, quality, last_run_at, next_run_at, enabled}]` |
+| GET | `/api/subscriptions` | → `[{id, target_type, creator_id, collection_id?, creator_nickname, target_name, interval_minutes, auto_download, quality, last_run_at, next_run_at, enabled, new_works, new_downloaded}]`;`new_works` = 监控期间(该订阅创建后)新收录的作品数,`new_downloaded` = 其中已下载(succeeded)数 |
 | POST | `/api/subscriptions` | `{target_type:"creator"\|"collection", creator_id, collection_id?, interval_minutes, auto_download:bool, quality?}` |
 | PATCH | `/api/subscriptions/{id}` | 部分更新(同上字段均可选) |
 | DELETE | `/api/subscriptions/{id}` | |
