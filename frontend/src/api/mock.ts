@@ -74,6 +74,8 @@ interface MockCreator {
   avatar_url: string;
   profile_url: string;
   reported_work_count: number;
+  /** 契约 v1.3:独立下载根目录;null = 跟随全局。 */
+  download_root: string | null;
   created_at: string;
 }
 
@@ -171,6 +173,8 @@ interface MockSubscription {
 interface MockSettings {
   provider_mode: Settings["provider_mode"];
   cookie: string;
+  /** 契约 v1.3:全局下载根目录(绝对路径,空 = 默认 <data_dir>/downloads)。 */
+  download_root: string;
   download_concurrency: number;
   download_quality: string;
   scan_page_delay_ms: number;
@@ -298,6 +302,7 @@ const state: MockState = {
   settings: {
     provider_mode: "auto",
     cookie: "",
+    download_root: "",
     download_concurrency: 3,
     download_quality: "1080p",
     scan_page_delay_ms: 2000,
@@ -359,6 +364,7 @@ function seed(): void {
       avatar_url: avatarSvg(nickname[0], (hashString(nickname) % 300) + 20),
       profile_url: `https://www.douyin.com/user/MS4wLjABAAAA_seed_${state.ids.creator}`,
       reported_work_count: reported,
+      download_root: null,
       created_at: iso(now - (4 - state.ids.creator) * 86400_000),
     };
     state.creators.push(c);
@@ -395,6 +401,8 @@ function seed(): void {
   const cols3 = seedCollections(c3, ["默片修复所", "午夜短片", "配乐实验"]);
   const w3 = makeWorks(c3, 36, now - 3 * 86400_000, cols3);
   state.works.push(...w3);
+  // 契约 v1.3 示例:该博主设置了独立下载根目录(非空示例,便于前端区分"独立/全局")
+  c3.download_root = "E:\\Media\\Douyin\\night-screening";
 
   // 初始下载任务(与作品 dl_status 一致)
   const thresholds: Record<number, { succ: number; fail: number; cancel: number }> = {
@@ -887,6 +895,7 @@ function creatorJson(c: MockCreator): Creator {
     works_count: works.length,
     downloaded_count: downloaded,
     download_bytes: downloadBytesOf(c.id),
+    download_root: c.download_root,
     created_at: c.created_at,
   };
 }
@@ -995,6 +1004,11 @@ function bool(v: unknown, fallback = false): boolean {
 }
 function numArray(v: unknown): number[] {
   return Array.isArray(v) ? v.map((x) => Number(x)).filter((x) => Number.isFinite(x)) : [];
+}
+
+/** 契约 v1.3:下载根目录须为绝对路径(Windows 盘符或 POSIX 根)。 */
+function isAbsolutePath(p: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith("/");
 }
 
 const ok = (json: unknown): MockResponse => ({ status: 200, json });
@@ -1146,6 +1160,7 @@ export function mockRoute(req: MockRequest): MockResponse {
           avatar_url: avatarSvg(nickname[0], (hashString(nickname) % 300) + 20),
           profile_url: profileUrl,
           reported_work_count: ri(60, 420),
+          download_root: null,
           created_at: iso(now),
         };
         state.creators.push(creator);
@@ -1186,6 +1201,42 @@ export function mockRoute(req: MockRequest): MockResponse {
       return err(405, "method not allowed");
     }
 
+    if (seg[2] === "download-root" && method === "PATCH") {
+      // 契约 v1.3:{path: string|null};null = 清除独立设置跟随全局;须为绝对路径,后端自动建目录(mock 仅改内存)
+      if (b.path === null || b.path === undefined) {
+        creator.download_root = null;
+      } else {
+        const p = str(b.path).trim();
+        if (!p) return err(400, "path 不能为空(清除独立设置请传 null)");
+        if (!isAbsolutePath(p)) return err(400, "path 必须为绝对路径,如 D:\\Media\\Douyin");
+        creator.download_root = p;
+      }
+      return ok({ ok: true, download_root: creator.download_root });
+    }
+    if (seg[2] === "move-downloads" && method === "POST") {
+      // 契约 v1.3:{target_root} 把已下载文件整体搬到新根;存在 downloading 任务时 409。
+      // mock 不触达文件系统:改写内存中的资产路径前缀并返回统计。
+      const targetRoot = str(b.target_root).trim();
+      if (!targetRoot) return err(400, "target_root 不能为空");
+      if (!isAbsolutePath(targetRoot)) return err(400, "target_root 必须为绝对路径,如 D:\\Media\\Douyin");
+      // 排队中/下载中的任务都会往旧目录写文件,均视为忙碌(契约对 downloading 明确 409)
+      const hasDownloading = state.jobs.some(
+        (j) => j.creator_id === creatorId && (j.status === "downloading" || j.status === "queued"),
+      );
+      if (hasDownloading) return err(409, "该博主存在下载中的任务,请稍后再试");
+      const workIds = new Set(state.works.filter((w) => w.creator_id === creatorId).map((w) => w.id));
+      let movedFiles = 0;
+      let movedBytes = 0;
+      for (const a of state.assets) {
+        if (!workIds.has(a.work_id)) continue;
+        movedFiles += 1;
+        movedBytes += a.size_bytes;
+        if (a.path.startsWith("downloads/")) {
+          a.path = targetRoot.replace(/[\\/]+$/, "") + a.path.slice("downloads".length);
+        }
+      }
+      return ok({ moved_files: movedFiles, moved_bytes: movedBytes, skipped_files: 0, failed_files: [] });
+    }
     if (seg[2] === "rescan" && method === "POST") {
       const scanId = startScan(creatorId, bool(b.full, false));
       return { status: 202, json: { scan_id: scanId } };
@@ -1492,6 +1543,12 @@ export function mockRoute(req: MockRequest): MockResponse {
       const s = state.settings;
       if (b.provider_mode !== undefined) s.provider_mode = str(b.provider_mode, s.provider_mode) as MockSettings["provider_mode"];
       if (typeof b.cookie === "string" && b.cookie.length > 0) s.cookie = b.cookie;
+      if (typeof b.download_root === "string") {
+        // 契约 v1.3:绝对路径,空 = 默认 <data_dir>/downloads;后端保存时自动建目录(mock 仅存内存)
+        const root = b.download_root.trim();
+        if (root && !isAbsolutePath(root)) return err(400, "download_root 必须为绝对路径,如 D:\\Media\\Douyin");
+        s.download_root = root;
+      }
       if (b.download_concurrency !== undefined) s.download_concurrency = Math.min(8, Math.max(1, num(b.download_concurrency, s.download_concurrency)));
       if (b.download_quality !== undefined) s.download_quality = str(b.download_quality, s.download_quality);
       if (b.scan_page_delay_ms !== undefined) s.scan_page_delay_ms = Math.min(10000, Math.max(1000, num(b.scan_page_delay_ms, s.scan_page_delay_ms)));

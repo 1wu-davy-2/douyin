@@ -6,24 +6,35 @@
  */
 import { useEffect, useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Library as LibraryIcon, Plus, RotateCcw } from "lucide-react";
+import { Library as LibraryIcon, Pencil, Plus, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
-import { createCreator, rescanCreator } from "../api/endpoints";
-import { qk, useCollections, useCreators, useWorks } from "../api/queries";
-import type { Quality, WorkDlFilter, WorkSort, WorkTypeFilter } from "../api/types";
+import { ApiError } from "../api/client";
+import { createCreator, moveCreatorDownloads, rescanCreator, setCreatorDownloadRoot } from "../api/endpoints";
+import { qk, useCollections, useCreators, useSettings, useWorks } from "../api/queries";
+import type { Creator, MoveDownloadsResult, Quality, WorkDlFilter, WorkSort, WorkTypeFilter } from "../api/types";
 import { EmptyState } from "../components/empty-state";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Checkbox } from "../components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
 import { Progress } from "../components/ui/progress";
 import { Skeleton } from "../components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { useDebouncedValue } from "../lib/use-debounced-value";
 import { getScanSnapshot, subscribeScans, type LiveScan } from "../lib/scan-store";
-import { formatBytes } from "../lib/format";
+import { formatBytes, truncateMiddle } from "../lib/format";
 import { openPlayer } from "../lib/player-store";
 import { batchWorkIds, createDownloads } from "../api/endpoints";
-import { cn, removeFromSet, toggleInSet, unionIntoSet } from "../lib/utils";
+import { cn, isAbsolutePath, removeFromSet, toggleInSet, unionIntoSet } from "../lib/utils";
 import { CollectionsPanel } from "./library/collections-panel";
 import { WorksPanel } from "./library/works-panel";
 
@@ -230,6 +241,7 @@ export function LibraryPage() {
                 <p className="text-xs text-muted-foreground">
                   已收录 {selectedCreator.works_count} / 主页 {selectedCreator.reported_work_count} 个作品 · 已下载{" "}
                   {selectedCreator.downloaded_count} · 下载空间 {formatBytes(selectedCreator.download_bytes)}
+                  <DownloadRootEditor creator={selectedCreator} />
                 </p>
               </div>
             </div>
@@ -392,5 +404,187 @@ function CreatorCard({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** move-downloads 的失败数:契约 v1.3 返回失败明细数组([{path,error}]),兼容数值计数。 */
+function failedCountOf(res: MoveDownloadsResult): number {
+  const failed: unknown = res.failed_files;
+  if (Array.isArray(failed)) return failed.length;
+  return typeof failed === "number" ? failed : 0;
+}
+
+/**
+ * 博主详情标题行的下载路径指示 + 编辑入口(契约 v1.3):
+ * 显示当前生效路径(独立 ?? 全局 ?? 默认)并用徽标区分来源;铅笔按钮弹出编辑小窗。
+ */
+function DownloadRootEditor({ creator }: { creator: Creator }) {
+  const [open, setOpen] = useState(false);
+  const { data: settings } = useSettings();
+  const own = creator.download_root ?? null;
+  const globalRoot = settings?.download_root ?? "";
+  const displayPath = own ?? globalRoot ?? "";
+  const source = own ? "独立" : globalRoot ? "全局" : "默认";
+  const titleText = own
+    ? `独立下载根目录:${own}`
+    : globalRoot
+      ? `跟随全局下载根目录:${globalRoot}`
+      : "使用默认下载根目录:<data_dir>/downloads";
+
+  return (
+    <span className="inline-flex items-center gap-1 whitespace-nowrap align-baseline">
+      <span aria-hidden="true">·</span>
+      <Badge variant={own ? "info" : "muted"} className="px-1.5 py-0 text-[10px] leading-4">
+        {source}
+      </Badge>
+      <span className="font-mono text-[11px]" title={titleText}>
+        {displayPath ? truncateMiddle(displayPath, 34) : "data\\downloads"}
+      </span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-5 text-muted-foreground hover:text-foreground"
+        title="编辑下载根目录"
+        aria-label="编辑下载根目录"
+        onClick={() => setOpen(true)}
+      >
+        <Pencil className="size-3" />
+      </Button>
+      <DownloadRootDialog creator={creator} open={open} onOpenChange={setOpen} />
+    </span>
+  );
+}
+
+/**
+ * 独立下载根目录编辑小窗(契约 v1.3):
+ * 空 = 跟随全局;保存 PATCH /creators/{id}/download-root;
+ * 可选同时 POST /creators/{id}/move-downloads 搬移已下载文件(409 = 有下载中任务)。
+ */
+function DownloadRootDialog({
+  creator,
+  open,
+  onOpenChange,
+}: {
+  creator: Creator;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [pathInput, setPathInput] = useState("");
+  const [moveFiles, setMoveFiles] = useState(false);
+
+  // 打开瞬间同步当前值;仅依赖 open,避免后台 refetch(creator 引用变化)重置编辑中的内容
+  useEffect(() => {
+    if (open) {
+      setPathInput(creator.download_root ?? "");
+      setMoveFiles(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const moveMut = useMutation({
+    mutationFn: (vars: { creatorId: number; targetRoot: string }) =>
+      moveCreatorDownloads(vars.creatorId, vars.targetRoot),
+    onSuccess: (res) => {
+      const failed = failedCountOf(res);
+      const skipped = res.skipped_files ?? 0;
+      const description = skipped > 0 ? `跳过 ${skipped} 个文件` : undefined;
+      if (failed > 0) {
+        toast.warning(`已移动 ${res.moved_files} 个文件,${failed} 个失败`, { description });
+      } else {
+        toast.success(`已移动 ${res.moved_files} 个文件(${formatBytes(res.moved_bytes)})`, { description });
+      }
+      // 文件已搬到新位置,资产路径缓存全部失效
+      void queryClient.invalidateQueries({ queryKey: ["assets"] });
+    },
+    onError: (e) => {
+      if (e instanceof ApiError && e.status === 409) {
+        toast.error("有下载中的任务,稍后再试", { description: e.message });
+      } else {
+        toast.error("移动已下载文件失败", { description: e.message });
+      }
+    },
+  });
+
+  const saveMut = useMutation({
+    mutationFn: (vars: { creatorId: number; path: string | null; move: boolean }) =>
+      setCreatorDownloadRoot(vars.creatorId, vars.path),
+    onSuccess: (_res, vars) => {
+      toast.success(vars.path ? "已设置独立下载根目录" : "已改为跟随全局下载目录", {
+        description: vars.path ? "仅新下载落入新目录,历史文件位置不变" : undefined,
+      });
+      void queryClient.invalidateQueries({ queryKey: qk.creators });
+      onOpenChange(false);
+      if (vars.move && vars.path) {
+        moveMut.mutate({ creatorId: vars.creatorId, targetRoot: vars.path });
+      }
+    },
+    onError: (e) => toast.error("保存下载根目录失败", { description: e.message }),
+  });
+
+  const handleSave = () => {
+    const next = pathInput.trim();
+    if (next && !isAbsolutePath(next)) {
+      toast.error("路径不合法", { description: "需为绝对路径,如 D:\\Media\\Douyin" });
+      return;
+    }
+    saveMut.mutate({ creatorId: creator.id, path: next === "" ? null : next, move: moveFiles });
+  };
+
+  const canMove = pathInput.trim() !== "";
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-base">下载根目录 · {creator.nickname}</DialogTitle>
+          <DialogDescription>为该博主设置独立下载目录,不影响其他博主</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="creator-download-root">下载根目录</Label>
+            <Input
+              id="creator-download-root"
+              className="font-mono text-xs"
+              placeholder="留空 = 跟随全局下载根目录"
+              value={pathInput}
+              onChange={(e) => setPathInput(e.target.value)}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              绝对路径,保存时自动创建目录;修改后仅新下载落入新目录,历史文件位置不变(资产按绝对路径记录)。
+            </p>
+          </div>
+          <label
+            htmlFor="creator-move-downloads"
+            className="flex items-start gap-2 rounded-lg border border-border px-3 py-2.5"
+          >
+            <Checkbox
+              id="creator-move-downloads"
+              className="mt-0.5"
+              checked={moveFiles}
+              disabled={!canMove || saveMut.isPending}
+              onCheckedChange={(v) => setMoveFiles(v === true)}
+            />
+            <span className="min-w-0">
+              <span className="block text-sm">同时移动已下载文件到新路径</span>
+              <span className="block text-[11px] text-muted-foreground">
+                {canMove
+                  ? "把该博主已下载文件整体搬到新目录;有下载中的任务时无法执行"
+                  : "填写新路径后可用"}
+              </span>
+            </span>
+          </label>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saveMut.isPending}>
+            取消
+          </Button>
+          <Button onClick={handleSave} disabled={saveMut.isPending}>
+            {saveMut.isPending ? "保存中…" : "保存"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

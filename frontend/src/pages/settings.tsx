@@ -18,10 +18,12 @@ import { Label } from "../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { Switch } from "../components/ui/switch";
+import { isAbsolutePath } from "../lib/utils";
 
 interface SettingsForm {
   provider_mode: Settings["provider_mode"];
   cookie: string;
+  download_root: string;
   download_concurrency: string;
   download_quality: string;
   scan_page_delay_ms: string;
@@ -37,6 +39,8 @@ function toForm(s: Settings): SettingsForm {
   return {
     provider_mode: s.provider_mode,
     cookie: s.cookie,
+    // 契约 v1.3:绝对路径,空 = 默认 <data_dir>/downloads(后端未返回时按空串容错)
+    download_root: s.download_root ?? "",
     download_concurrency: String(s.download_concurrency),
     download_quality: s.download_quality,
     scan_page_delay_ms: String(s.scan_page_delay_ms),
@@ -148,7 +152,13 @@ export function SettingsPage() {
       toast.error("下载并发不合法", { description: "并发数需为 1 ~ 8 的整数" });
       return;
     }
-    saveMut.mutate({ download_concurrency: concurrency, download_quality: form.download_quality });
+    // 契约 v1.3:绝对路径,空 = 默认 <data_dir>/downloads
+    const root = form.download_root.trim();
+    if (root && !isAbsolutePath(root)) {
+      toast.error("下载根目录不合法", { description: "需为绝对路径,如 D:\\Media\\Douyin" });
+      return;
+    }
+    saveMut.mutate({ download_root: root, download_concurrency: concurrency, download_quality: form.download_quality });
   };
 
   const saveNotify = () => {
@@ -269,7 +279,7 @@ export function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">下载</CardTitle>
-          <CardDescription>并发与默认画质</CardDescription>
+          <CardDescription>并发、默认画质与存储位置</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
           <Field label="并发数" htmlFor="set-concurrency" hint="1 ~ 8">
@@ -294,6 +304,21 @@ export function SettingsPage() {
               </SelectContent>
             </Select>
           </Field>
+          <div className="md:col-span-2">
+            <Field
+              label="下载根目录"
+              htmlFor="set-download-root"
+              hint="修改后仅新下载落入新目录,历史文件位置不变(资产按绝对路径记录);保存时自动创建目录"
+            >
+              <Input
+                id="set-download-root"
+                className="font-mono text-xs"
+                placeholder={"默认 data\\downloads(留空 = 跟随默认)"}
+                value={form.download_root}
+                onChange={(e) => update({ download_root: e.target.value })}
+              />
+            </Field>
+          </div>
         </CardContent>
         <CardFooter>
           <Button onClick={saveDownload} disabled={saveMut.isPending}>

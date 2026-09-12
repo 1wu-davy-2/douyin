@@ -30,3 +30,8 @@ export function removeFromSet(set: ReadonlySet<number>, ids: Iterable<number>): 
   for (const id of ids) next.delete(id);
   return next;
 }
+
+/** 契约 v1.3:下载根目录须为绝对路径(Windows 盘符如 D:\dir,或 POSIX 根 /home/…)。 */
+export function isAbsolutePath(p: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith("/");
+}

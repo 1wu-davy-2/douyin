@@ -66,6 +66,8 @@ export interface Creator {
   downloaded_count: number;
   /** 契约 v1.2:该博主全部已下载资产的字节总和(SUM assets.size_bytes,kind video+image)。 */
   download_bytes: number;
+  /** 契约 v1.3:该博主独立下载根目录(绝对路径);null = 跟随全局 download_root。 */
+  download_root: string | null;
   created_at: string;
 }
 
@@ -93,6 +95,28 @@ export interface CreateCreatorResult {
 
 export interface RescanResult {
   scan_id: number;
+}
+
+/** 契约 v1.3:PATCH /api/creators/{id}/download-root 响应。 */
+export interface CreatorDownloadRootResult {
+  ok: boolean;
+  /** null = 已清除独立设置,跟随全局。 */
+  download_root: string | null;
+}
+
+/** 契约 v1.3:move-downloads 失败明细元素。 */
+export interface MoveFailedFile {
+  path: string;
+  error: string;
+}
+
+/** 契约 v1.3:POST /api/creators/{id}/move-downloads 响应。 */
+export interface MoveDownloadsResult {
+  moved_files: number;
+  moved_bytes: number;
+  /** 因目标已存在等原因跳过的文件数(后端可能省略)。 */
+  skipped_files?: number;
+  failed_files: MoveFailedFile[];
 }
 
 export interface Collection {
@@ -259,6 +283,8 @@ export interface SmtpConfig {
 export interface Settings {
   provider_mode: "auto" | "sidecar" | "mock";
   cookie: string;
+  /** 契约 v1.3:全局下载根目录(绝对路径,空 = 默认 <data_dir>/downloads);保存时后端自动建目录。 */
+  download_root: string;
   download_concurrency: number;
   download_quality: string;
   scan_page_delay_ms: number;
@@ -275,6 +301,8 @@ export interface Settings {
 export interface SettingsPatch {
   provider_mode?: Settings["provider_mode"];
   cookie?: string;
+  /** 契约 v1.3:空字符串 = 恢复默认 <data_dir>/downloads。 */
+  download_root?: string;
   download_concurrency?: number;
   download_quality?: string;
   scan_page_delay_ms?: number;

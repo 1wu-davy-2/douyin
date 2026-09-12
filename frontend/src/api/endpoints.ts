@@ -13,11 +13,13 @@ import type {
   CreateDownloadsResult,
   Creator,
   CreatorDetail,
+  CreatorDownloadRootResult,
   CursorPage,
   DownloadsSummary,
   Health,
   Job,
   JobStatus,
+  MoveDownloadsResult,
   NotificationTestResult,
   Page,
   Quality,
@@ -63,6 +65,15 @@ export const createCreator = (profileUrl: string) =>
   api<CreateCreatorResult>("/api/creators", { method: "POST", json: { profile_url: profileUrl } });
 export const getCreator = (id: number) => api<CreatorDetail>(`/api/creators/${id}`);
 export const deleteCreator = (id: number) => api<{ ok: boolean }>(`/api/creators/${id}`, { method: "DELETE" });
+/** 契约 v1.3:设置博主独立下载根目录;path=null 表示清除,跟随全局。后端自动建目录。 */
+export const setCreatorDownloadRoot = (id: number, path: string | null) =>
+  api<CreatorDownloadRootResult>(`/api/creators/${id}/download-root`, { method: "PATCH", json: { path } });
+/** 契约 v1.3:把该博主已下载文件整体搬到新根;存在 downloading 任务时后端 409。 */
+export const moveCreatorDownloads = (id: number, targetRoot: string) =>
+  api<MoveDownloadsResult>(`/api/creators/${id}/move-downloads`, {
+    method: "POST",
+    json: { target_root: targetRoot },
+  });
 export const rescanCreator = (id: number, full = false) =>
   api<RescanResult>(`/api/creators/${id}/rescan`, { method: "POST", json: { full } });
 export const listCollections = (creatorId: number) =>

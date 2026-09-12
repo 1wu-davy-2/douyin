@@ -49,3 +49,15 @@ export function formatDate(iso: string | null | undefined): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
+
+/**
+ * 中间省略截断:保留首尾(适合文件路径,盘符与末级目录同时可见)。
+ * 超长时如 "E:\Media\Douyin\…\night-screening"。
+ */
+export function truncateMiddle(s: string, max = 32): string {
+  if (s.length <= max) return s;
+  const keep = Math.max(1, max - 1);
+  const head = Math.ceil(keep / 2);
+  const tail = Math.floor(keep / 2);
+  return s.slice(0, head) + "…" + (tail > 0 ? s.slice(-tail) : "");
+}
