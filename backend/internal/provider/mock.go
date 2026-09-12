@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"douyin/backend/internal/mockmedia"
 	"errors"
 	"fmt"
 	"time"
@@ -101,16 +102,16 @@ func (p *MockProvider) PostsPage(_ context.Context, _ string, cursor string, cou
 // URL per tier. URLs are RELATIVE ("/mockcdn/...") on purpose: the API server
 // hosts the fake CDN handler (internal/api/mockcdn.go, registered when
 // DY_MOCK=1) and the downloader anchors relative paths at its BaseURL
-// (http://127.0.0.1:<port>). The handler streams deterministic pseudo-random
-// bytes so mock mode exercises the full scan -> download -> SSE -> assets
-// chain offline.
+// (http://127.0.0.1:<port>). The handler streams real (truncated) sample MP4
+// bytes from internal/mockmedia so mock mode exercises the full
+// scan -> download -> SSE -> playable-assets chain offline.
 func mockVariants(itemID string) []Variant {
 	return []Variant{
-		{Quality: "1080p", Width: 1080, Height: 1920, Bitrate: 3000000, SizeBytes: 2097152,
+		{Quality: "1080p", Width: 1080, Height: 1920, Bitrate: 3000000, SizeBytes: int64(mockmedia.SampleVideoSize),
 			URL: fmt.Sprintf("/mockcdn/%s/1080p.mp4", itemID)},
-		{Quality: "720p", Width: 720, Height: 1280, Bitrate: 1500000, SizeBytes: 1048576,
+		{Quality: "720p", Width: 720, Height: 1280, Bitrate: 1500000, SizeBytes: int64(mockmedia.Sample720Size),
 			URL: fmt.Sprintf("/mockcdn/%s/720p.mp4", itemID)},
-		{Quality: "540p", Width: 540, Height: 960, Bitrate: 800000, SizeBytes: 524288,
+		{Quality: "540p", Width: 540, Height: 960, Bitrate: 800000, SizeBytes: int64(mockmedia.Sample540Size),
 			URL: fmt.Sprintf("/mockcdn/%s/540p.mp4", itemID)},
 	}
 }

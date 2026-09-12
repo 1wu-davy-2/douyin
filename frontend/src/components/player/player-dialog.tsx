@@ -28,7 +28,10 @@ export function PlayerDialog() {
   const isFirst = player.index <= 0;
 
   const assets = useWorkAssets(item ? (MOCK ? null : item.workId) : null);
-  const videoAsset = assets.data?.find((a) => a.kind === "video");
+  // 同一作品可能因换画质重下存在多个 video 资产,取最新一份
+  const videoAsset = (assets.data ?? [])
+    .filter((a) => a.kind === "video")
+    .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""))[0];
   const src = item ? (MOCK ? DEMO_VIDEO : videoAsset ? assetContentUrl(videoAsset.id) : null) : null;
   const loading = Boolean(item) && !MOCK && assets.isPending;
   const missing = Boolean(item) && !MOCK && assets.isSuccess && !videoAsset;

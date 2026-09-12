@@ -8,6 +8,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"douyin/backend/internal/mockmedia"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -206,8 +207,8 @@ func TestDownloadsAPIFlow(t *testing.T) {
 	raw, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
 	var page2 struct {
-		Items      []map[string]any 
-		NextCursor *int64           
+		Items      []map[string]any
+		NextCursor *int64
 	}
 	if err := json.Unmarshal(raw, &page2); err != nil || len(page2.Items) != 1 || page2.NextCursor != nil {
 		t.Fatalf("second page = %s", raw)
@@ -243,7 +244,7 @@ func TestDownloadsAPIFlow(t *testing.T) {
 	if resp.StatusCode != http.StatusPartialContent {
 		t.Fatalf("range status = %d, want 206", resp.StatusCode)
 	}
-	if cr := resp.Header.Get("Content-Range"); cr != "bytes 0-1023/2097152" {
+	if cr := resp.Header.Get("Content-Range"); cr != fmt.Sprintf("bytes 0-1023/%d", mockmedia.SampleVideoSize) {
 		t.Fatalf("content-range = %q", cr)
 	}
 	if len(part) != 1024 {
@@ -260,7 +261,7 @@ func TestDownloadsAPIFlow(t *testing.T) {
 	}
 	full, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || len(full) != 2097152 {
+	if resp.StatusCode != http.StatusOK || len(full) != mockmedia.SampleVideoSize {
 		t.Fatalf("full GET status=%d len=%d", resp.StatusCode, len(full))
 	}
 
@@ -416,7 +417,7 @@ func TestMockCDNRoute(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || len(body) != 2097152 {
+	if resp.StatusCode != http.StatusOK || len(body) != mockmedia.Sample720Size {
 		t.Fatalf("mock video: status=%d len=%d", resp.StatusCode, len(body))
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "video/mp4" {
@@ -429,7 +430,7 @@ func TestMockCDNRoute(t *testing.T) {
 	}
 	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || len(body) != 1024 {
+	if resp.StatusCode != http.StatusOK || len(body) == 0 {
 		t.Fatalf("mock cover: status=%d len=%d", resp.StatusCode, len(body))
 	}
 

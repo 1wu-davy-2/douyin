@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"douyin/backend/internal/mockmedia"
 	"strconv"
 	"strings"
 	"testing"
@@ -162,9 +163,9 @@ func TestMockWorkDetail(t *testing.T) {
 		t.Fatalf("unexpected mock cover url %q", detail.CoverURL)
 	}
 	for q, want := range map[string][4]int{
-		"1080p": {1080, 1920, 3000000, 2097152},
-		"720p":  {720, 1280, 1500000, 1048576},
-		"540p":  {540, 960, 800000, 524288},
+		"1080p": {1080, 1920, 3000000, mockmedia.SampleVideoSize},
+		"720p":  {720, 1280, 1500000, mockmedia.Sample720Size},
+		"540p":  {540, 960, 800000, mockmedia.Sample540Size},
 	} {
 		v, ok := qualities[q]
 		if !ok {

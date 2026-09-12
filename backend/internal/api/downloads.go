@@ -306,9 +306,9 @@ func (s *Server) handleBatchDownloads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Action  string   `json:"action"`
-		IDs     []int64  `json:"ids"`
-		Quality *string  `json:"quality"`
+		Action  string  `json:"action"`
+		IDs     []int64 `json:"ids"`
+		Quality *string `json:"quality"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
