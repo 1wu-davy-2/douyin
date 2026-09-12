@@ -389,6 +389,8 @@ type workItem struct {
 	PublishedAt       *string `json:"published_at"`
 	CollectionID      *int64  `json:"collection_id"`
 	CollectionName    *string `json:"collection_name"`
+	Type              string  `json:"type"`
+	ImageCount        int64   `json:"image_count"`
 	DlStatus          string  `json:"dl_status"`
 	DownloadedQuality *string `json:"downloaded_quality"`
 	CreatedAt         string  `json:"created_at"`
@@ -448,6 +450,8 @@ const dlStatusExpr = `CASE COALESCE(lj.status, '')
 const worksListQuery = `
 	SELECT w.id, w.item_id, w.title, w.cover_url, w.duration, w.published_at,
 	       w.collection_id, c.name, w.created_at,
+	       w.type,
+	       (SELECT COUNT(*) FROM assets ia WHERE ia.work_id = w.id AND ia.kind = 'image'),
 	       ` + dlStatusExpr + `,
 	       CASE WHEN lj.status = 'succeeded' THEN lj.quality END
 	FROM works w
@@ -531,7 +535,8 @@ func (s *Server) serveWorkList(w http.ResponseWriter, r *http.Request, f workFil
 		var collectionID, collectionName, downloadedQuality sql.NullString
 		var published sql.NullString
 		if err := rows.Scan(&it.ID, &it.ItemID, &it.Title, &it.CoverURL, &it.Duration, &published,
-			&collectionID, &collectionName, &it.CreatedAt, &it.DlStatus, &downloadedQuality); err != nil {
+			&collectionID, &collectionName, &it.CreatedAt, &it.Type, &it.ImageCount,
+			&it.DlStatus, &downloadedQuality); err != nil {
 			writeInternalError(w, err)
 			return
 		}
@@ -621,15 +626,17 @@ func (s *Server) handleGetWork(w http.ResponseWriter, r *http.Request) {
 	}
 	var collectionID, collectionName, mixID sql.NullString
 	var published, deleted sql.NullString
+	var imageCount int64
 	err := s.deps.DB.QueryRowContext(r.Context(), `
 		SELECT w.id, w.item_id, w.creator_id, w.title, w.cover_url, w.duration, w.published_at,
-		       w.collection_id, c.name, c.mix_id, w.created_at, w.deleted_at
+		       w.collection_id, c.name, c.mix_id, w.created_at, w.deleted_at, w.type,
+		       (SELECT COUNT(*) FROM assets ia WHERE ia.work_id = w.id AND ia.kind = 'image')
 		FROM works w
 		LEFT JOIN collections c ON c.id = w.collection_id
 		WHERE w.id = ?`, id).
 		Scan(&detail.ID, &detail.ItemID, &detail.CreatorID, &detail.Title, &detail.CoverURL,
 			&detail.Duration, &published, &collectionID, &collectionName, &mixID,
-			&detail.CreatedAt, &deleted)
+			&detail.CreatedAt, &deleted, &detail.Type, &imageCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "work not found")
 		return
@@ -644,6 +651,7 @@ func (s *Server) handleGetWork(w http.ResponseWriter, r *http.Request) {
 	if deleted.Valid {
 		detail.DeletedAt = &deleted.String
 	}
+	detail.ImageCount = imageCount
 	if collectionID.Valid {
 		if cid, perr := strconv.ParseInt(collectionID.String, 10, 64); perr == nil {
 			detail.CollectionID = &cid
@@ -651,11 +659,12 @@ func (s *Server) handleGetWork(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Assets, video assets first.
+	// Assets in the contract order: video (newest first) -> image (quality
+	// sequence ascending) -> cover -> metadata.
 	rows, err := s.deps.DB.QueryContext(r.Context(), `
 		SELECT id, kind, path, size_bytes, quality, created_at
 		FROM assets WHERE work_id = ?
-		ORDER BY CASE kind WHEN 'video' THEN 0 ELSE 1 END, id`, id)
+		`+assetOrder, id)
 	if err != nil {
 		writeInternalError(w, err)
 		return

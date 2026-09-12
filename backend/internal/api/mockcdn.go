@@ -11,6 +11,9 @@ package api
 //	        pseudo-random payloads fail Chrome's demuxer with
 //	        DEMUXER_ERROR_COULD_NOT_OPEN.
 //	  GET /mockcdn/{item_id}/cover.jpg     -> generated 128x128 JPEG.
+//	  GET /mockcdn/{item_id}/img{n}.jpg    -> generated gallery image (the mock
+//	        image works' per-index picture, distinct tint per n).
+//	  GET /mockcdn/{item_id}/live1.mp4     -> the mock gallery live segment.
 //
 // The mock provider (internal/provider/mock.go) returns RELATIVE URLs of this
 // shape; the downloader anchors them at its BaseURL (http://127.0.0.1:<port>).
@@ -46,18 +49,42 @@ func (s *Server) serveMockCDN(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch name {
-	case "cover.jpg":
+	switch {
+	case name == "cover.jpg":
 		writeMockPayload(w, mockmedia.CoverJPEG(), "image/jpeg", 0)
-	case "1080p.mp4":
+	case isMockGalleryImage(name):
+		n, _ := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(name, "img"), ".jpg"))
+		writeMockPayload(w, mockmedia.GalleryJPEG(n), "image/jpeg", 0)
+	case name == "live1.mp4":
+		writeMockPayload(w, mockmedia.Sample540Video, "video/mp4", mockChunkDelay)
+	case name == "1080p.mp4":
 		writeMockPayload(w, mockmedia.SampleVideo, "video/mp4", mockChunkDelay)
-	case "720p.mp4":
+	case name == "720p.mp4":
 		writeMockPayload(w, mockmedia.Sample720Video, "video/mp4", mockChunkDelay)
-	case "540p.mp4":
+	case name == "540p.mp4":
 		writeMockPayload(w, mockmedia.Sample540Video, "video/mp4", mockChunkDelay)
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
+}
+
+// isMockGalleryImage reports whether name matches the mock gallery pattern
+// img{n}.jpg with a decimal n (the mock provider's image work URLs).
+func isMockGalleryImage(name string) bool {
+	rest, ok := strings.CutPrefix(name, "img")
+	if !ok {
+		return false
+	}
+	rest, ok = strings.CutSuffix(rest, ".jpg")
+	if !ok || rest == "" {
+		return false
+	}
+	for _, r := range rest {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // writeMockPayload emits the payload with Content-Length, optionally paced in

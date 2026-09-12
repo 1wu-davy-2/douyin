@@ -442,4 +442,29 @@ func TestMockCDNRoute(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown quality = %d, want 404", resp.StatusCode)
 	}
+
+	// Stage 9 gallery payloads: img{n}.jpg with a per-index tint and the
+	// live segment; img0/imgx (malformed index) stay 404.
+	for name, ct := range map[string]string{"img1.jpg": "image/jpeg", "img5.jpg": "image/jpeg", "live1.mp4": "video/mp4"} {
+		resp, err := http.Get(server.URL + "/mockcdn/mock_0007/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || len(body) == 0 {
+			t.Fatalf("mock gallery %s: status=%d len=%d", name, resp.StatusCode, len(body))
+		}
+		if got := resp.Header.Get("Content-Type"); got != ct {
+			t.Fatalf("mock gallery %s content-type = %q, want %q", name, got, ct)
+		}
+	}
+	resp, err = http.Get(server.URL + "/mockcdn/mock_0007/imgx.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("malformed gallery name = %d, want 404", resp.StatusCode)
+	}
 }

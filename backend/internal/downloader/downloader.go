@@ -29,10 +29,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"sync"
-	"math/rand"
 	"time"
 
 	"douyin/backend/internal/events"
@@ -60,7 +60,7 @@ const (
 	speedWindow        = 5 * time.Second  // sliding speed estimate window
 	maxAttempts        = 5                // retry-failed ceiling
 	// StopGrace is the default stop budget for finalizing in-flight jobs.
-	StopGrace          = 5 * time.Second
+	StopGrace = 5 * time.Second
 )
 
 // settingsKeyPaused persists the queue pause flag across restarts.
@@ -143,21 +143,21 @@ func New(parent context.Context, deps Deps) *Downloader {
 		client = newHTTPClient()
 	}
 	return &Downloader{
-		db:       deps.DB,
-		bus:      deps.Bus,
-		store:    deps.Store,
-		src:      deps.Source,
-		dataDir:  deps.DataDir,
-		baseURL:  deps.BaseURL,
-		client:   client,
-		workers:  workers,
-		mock:     deps.Mock,
-		baseCtx:  ctx,
+		db:        deps.DB,
+		bus:       deps.Bus,
+		store:     deps.Store,
+		src:       deps.Source,
+		dataDir:   deps.DataDir,
+		baseURL:   deps.BaseURL,
+		client:    client,
+		workers:   workers,
+		mock:      deps.Mock,
+		baseCtx:   ctx,
 		cancelAll: cancel,
-		gate:     newGate(defaultConcurrency),
-		q:        newJobQueue(queueCapacity),
-		cancels:  make(map[int64]context.CancelFunc),
-		trackers: make(map[int64]*tracker),
+		gate:      newGate(defaultConcurrency),
+		q:         newJobQueue(queueCapacity),
+		cancels:   make(map[int64]context.CancelFunc),
+		trackers:  make(map[int64]*tracker),
 	}
 }
 
@@ -422,10 +422,10 @@ func (d *Downloader) storePausedFlag(v bool) error {
 // gate is a reconfigurable counting semaphore (the download_concurrency
 // limit). Waiters wake on any release or limit change.
 type gate struct {
-	mu   sync.Mutex
-	wake chan struct{} // closed and replaced on every state change
+	mu    sync.Mutex
+	wake  chan struct{} // closed and replaced on every state change
 	limit int
-	held int
+	held  int
 }
 
 func newGate(limit int) *gate {

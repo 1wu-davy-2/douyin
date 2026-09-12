@@ -741,3 +741,54 @@ type enqueuerFunc func(ctx context.Context, ids []int64, quality string) error
 func (f enqueuerFunc) Enqueue(ctx context.Context, ids []int64, quality string) error {
 	return f(ctx, ids, quality)
 }
+
+// Stage 9: works.type is persisted from the provider's PostItem on insert and
+// refreshed on update; unknown/empty types fall back to video.
+func TestScanPersistsWorkType(t *testing.T) {
+	const total = 3
+	prof := &fakeProvider{pages: offsetPages(total)}
+	h := newHarness(t, prof)
+	creatorID := insertCreator(t, h, "MS4wLjABAAAAfake_wtype")
+	prof.profile = &provider.Profile{SecUID: "x", Nickname: "Fake", AwemeCount: total}
+
+	// fake_0001 stays video, fake_0002 becomes a 5-image gallery, fake_0003
+	// carries an unknown type that must fall back to video.
+	prof.pages["0"].Items[1].Type = provider.TypeImage
+	prof.pages["0"].Items[1].ImageCount = 5
+	prof.pages["0"].Items[1].Duration = 0
+	prof.pages["0"].Items[2].Type = "bogus"
+
+	if res := mustRun(t, h, creatorID, true); res.Status != StatusSucceeded {
+		t.Fatalf("full scan: %+v", res)
+	}
+	want := map[string]string{"fake_0001": "video", "fake_0002": "image", "fake_0003": "video"}
+	for item, wt := range want {
+		var got string
+		if err := h.dbs.QueryRow(`SELECT type FROM works WHERE item_id = ?`, item).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != wt {
+			t.Fatalf("work %s type = %q, want %q", item, got, wt)
+		}
+	}
+
+	// An update flips the type when the upstream re-classifies.
+	prof.pages["0"].Items[1].Type = provider.TypeVideo
+	prof.pages["0"].Items[1].ImageCount = 0
+	prof.pages["0"].Items[1].Duration = 31000
+	prof.pages["0"].Items[0].Type = provider.TypeImage
+	prof.pages["0"].Items[0].ImageCount = 4
+	prof.pages["0"].Items[0].Duration = 0
+	if res := mustRun(t, h, creatorID, true); res.Status != StatusSucceeded {
+		t.Fatalf("rescan: %+v", res)
+	}
+	for item, wt := range map[string]string{"fake_0001": "image", "fake_0002": "video"} {
+		var got string
+		if err := h.dbs.QueryRow(`SELECT type FROM works WHERE item_id = ?`, item).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != wt {
+			t.Fatalf("after rescan work %s type = %q, want %q", item, got, wt)
+		}
+	}
+}

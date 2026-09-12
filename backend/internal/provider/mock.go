@@ -5,6 +5,8 @@ import (
 	"douyin/backend/internal/mockmedia"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -40,6 +42,37 @@ func mockMixFor(pos int) (mixID, mixName string) {
 
 func mockPublishedAt(pos int) string {
 	return time.Unix(mockBaseTS-int64(pos-1)*86400, 0).UTC().Format(time.RFC3339)
+}
+
+// Mock gallery dimensions (3:4 portrait), in lockstep with sidecar/main.py.
+const (
+	mockImageWidth  = 1080
+	mockImageHeight = 1440
+)
+
+// mockKindFor maps the 0-based global index to (type, image_count): every 7th
+// work (index%7==6) is a gallery of 3+index%4 (3..6) images; index%14==13
+// additionally carries one live segment (surfaced by WorkDetail only).
+// Must match sidecar/main.py mock_kind_for byte for byte.
+func mockKindFor(idx int) (string, int) {
+	if idx%7 == 6 {
+		return TypeImage, 3 + idx%4
+	}
+	return TypeVideo, 0
+}
+
+// mockPosFromItemID parses "mock_0007" into 7; other shapes -> false (treated
+// as a video work).
+func mockPosFromItemID(itemID string) (int, bool) {
+	s := strings.TrimPrefix(itemID, "mock_")
+	if s == itemID {
+		return 0, false
+	}
+	pos, err := strconv.Atoi(s)
+	if err != nil || pos <= 0 {
+		return 0, false
+	}
+	return pos, true
 }
 
 // Profile always reports the same creator shape, regardless of sec_uid.
@@ -79,14 +112,21 @@ func (p *MockProvider) PostsPage(_ context.Context, _ string, cursor string, cou
 	for idx := start; idx < end; idx++ {
 		pos := idx + 1 // 1-based global position
 		mixID, mixName := mockMixFor(pos)
+		kind, imageCount := mockKindFor(idx)
+		duration := 30 + pos%25
+		if kind == TypeImage {
+			duration = 0 // contract: image works carry duration 0
+		}
 		items = append(items, PostItem{
 			ItemID:      fmt.Sprintf("mock_%04d", pos),
 			Title:       fmt.Sprintf("Mock作品 #%d", pos),
 			CoverURL:    fmt.Sprintf("https://mock.example/cover/%d.jpg", pos),
-			Duration:    30 + pos%25,
+			Duration:    duration,
 			PublishedAt: mockPublishedAt(pos),
 			MixID:       mixID,
 			MixName:     mixName,
+			Type:        kind,
+			ImageCount:  imageCount,
 		})
 	}
 
@@ -116,15 +156,51 @@ func mockVariants(itemID string) []Variant {
 	}
 }
 
-// WorkDetail returns the deterministic variants for any item_id.
+// WorkDetail returns the deterministic detail for any item_id: video works
+// get the 3-tier variant ladder, every 7th work (pos%7==0) is a gallery with
+// 3..6 images (/mockcdn/{item}/img{n}.jpg) and every 14th (pos%14==0) also
+// carries one live segment (/mockcdn/{item}/live1.mp4).
 func (p *MockProvider) WorkDetail(_ context.Context, itemID string) (*WorkDetail, error) {
 	if itemID == "" {
 		return nil, errors.New("mock provider: item_id is required")
 	}
+	cover := fmt.Sprintf("/mockcdn/%s/cover.jpg", itemID)
+	if pos, ok := mockPosFromItemID(itemID); ok {
+		idx := pos - 1
+		kind, imageCount := mockKindFor(idx)
+		if kind == TypeImage {
+			images := make([]WorkImage, 0, imageCount)
+			for n := 1; n <= imageCount; n++ {
+				u := fmt.Sprintf("/mockcdn/%s/img%d.jpg", itemID, n)
+				images = append(images, WorkImage{
+					URL:    u,
+					URLs:   []string{u},
+					Width:  mockImageWidth,
+					Height: mockImageHeight,
+				})
+			}
+			live := []LiveVideo{}
+			if idx%14 == 13 {
+				u := fmt.Sprintf("/mockcdn/%s/live1.mp4", itemID)
+				live = append(live, LiveVideo{URL: u, URLs: []string{u}})
+			}
+			return &WorkDetail{
+				ItemID:     itemID,
+				Title:      fmt.Sprintf("Mock作品 %s", itemID),
+				Type:       TypeImage,
+				CoverURL:   cover,
+				Duration:   0,
+				Variants:   []Variant{},
+				Images:     images,
+				LiveVideos: live,
+			}, nil
+		}
+	}
 	return &WorkDetail{
 		ItemID:   itemID,
 		Title:    fmt.Sprintf("Mock作品 %s", itemID),
-		CoverURL: fmt.Sprintf("/mockcdn/%s/cover.jpg", itemID),
+		Type:     TypeVideo,
+		CoverURL: cover,
 		Duration: 45,
 		Variants: mockVariants(itemID),
 	}, nil

@@ -18,16 +18,20 @@
 //     never read - every legacy query lists explicit columns. created_at/
 //     updated_at use the old first_seen_at; deleted_at stays NULL. The
 //     collection link is remapped old collections.id -> new collections.id.
-//   - work_assets -> assets. Kind mapping: video->video, image->cover,
-//     live_photo->cover, metadata->metadata (the v2 contract only knows
-//     video/cover/metadata). Quality is not on the old table; it comes from
-//     the linked download job (actual_quality, falling back to
-//     requested_quality) and numeric tiers are normalized to the new ladder
-//     ("720" -> "720p"; "original"/"highest" pass through). Video assets are
-//     only migrated when the file actually exists under the legacy downloads
-//     root; missing files are counted and reported as warnings. When several
-//     old rows share the v2 UNIQUE slot (work_id, kind, quality), the newest
-//     (created_at DESC) wins it.
+//   - work_assets -> assets. Kind mapping (stage 9): video->video (tier
+//     quality from the linked job), image->image with a 4-digit sequence
+//     quality ("0001", "0002", ... numbered per work by the old
+//     created_at/object_key order), live_photo->video with a "live0001"
+//     sequence quality (the old live_photo rows are the motion clips of live
+//     slides, always video/mp4 - the same shape the v2 downloader produces
+//     for gallery works), metadata->metadata. Nothing collapses into the
+//     cover slot anymore. Video tier assets are only migrated when the file
+//     actually exists under the legacy downloads root; missing files are
+//     counted and reported as warnings. When several old rows share the v2
+//     UNIQUE slot (work_id, kind, quality), the newest (created_at DESC)
+//     wins it.
+//   - works.type is inferred after the asset pass: any work holding image
+//     assets becomes type='image' (gallery), the rest stay 'video'.
 //   - download_jobs: only succeeded jobs whose video asset survived disk
 //     validation are rebuilt (status=succeeded, quality=asset quality,
 //     total_bytes=asset size, finished_at from the old row). All other
@@ -304,8 +308,10 @@ type migrator struct {
 	collMap      map[int64]int64  // old collection id -> new id
 	workByItem   map[string]workRef
 	workByOld    map[int64]workRef
-	valid        map[int64]videoRef // old work id -> validated video asset
-	copies       []fileCopy         // pending file copies (copy mode)
+	valid        map[int64]videoRef       // old work id -> validated video asset
+	imgSeq       map[int64]map[string]int // old work id -> object_key -> image sequence (1-based)
+	liveSeq      map[int64]map[string]int // old work id -> object_key -> live clip sequence (1-based)
+	copies       []fileCopy               // pending file copies (copy mode)
 }
 
 func (m *migrator) run() error {
@@ -323,6 +329,9 @@ func (m *migrator) run() error {
 	}
 	if err := m.migrateAssets(); err != nil {
 		return fmt.Errorf("assets: %w", err)
+	}
+	if err := m.applyWorkTypes(); err != nil {
+		return fmt.Errorf("work type inference: %w", err)
 	}
 	if err := m.migrateJobs(); err != nil {
 		return fmt.Errorf("download_jobs: %w", err)
@@ -386,8 +395,11 @@ func (m *migrator) preload() error {
 
 	// Video assets already in the target (previous run or new-tool download)
 	// count as validated for the download_jobs rebuild; keyed by new work id.
+	// Live-photo clips (quality "live%04d") never qualify: they are gallery
+	// segments, not the downloadable video tier a succeeded job refers to.
 	m.valid = map[int64]videoRef{}
-	if err := m.scan(`SELECT work_id, quality, size_bytes FROM assets WHERE kind = 'video'`, func(rows *sql.Rows) error {
+	if err := m.scan(`SELECT work_id, quality, size_bytes FROM assets
+		WHERE kind = 'video' AND (quality IS NULL OR quality NOT LIKE 'live%')`, func(rows *sql.Rows) error {
 		var workID, size int64
 		var quality sql.NullString
 		if err := rows.Scan(&workID, &quality, &size); err != nil {
@@ -398,12 +410,55 @@ func (m *migrator) preload() error {
 	}); err != nil {
 		return fmt.Errorf("preload assets: %w", err)
 	}
+
+	// Gallery sequence numbers: per work, old image rows get "0001"... and
+	// live_photo rows get "live0001"... in the old created_at/object_key
+	// order (the old archiver wrote them in slide order). object_key is
+	// UNIQUE per work, so it keys the inner maps.
+	m.imgSeq = map[int64]map[string]int{}
+	m.liveSeq = map[int64]map[string]int{}
+	if err := m.scanLegacy(`
+		SELECT work_id, asset_kind, object_key FROM work_assets
+		WHERE asset_kind IN ('image', 'live_photo')
+		ORDER BY work_id, created_at, object_key, id`, func(rows *sql.Rows) error {
+		var workID int64
+		var kind, objectKey string
+		if err := rows.Scan(&workID, &kind, &objectKey); err != nil {
+			return err
+		}
+		seq := m.imgSeq
+		if kind == "live_photo" {
+			seq = m.liveSeq
+		}
+		if seq[workID] == nil {
+			seq[workID] = map[string]int{}
+		}
+		seq[workID][objectKey] = len(seq[workID]) + 1
+		return nil
+	}); err != nil {
+		return fmt.Errorf("preload gallery sequences: %w", err)
+	}
 	return nil
 }
 
 // scan is a small rows-iteration helper that always closes the cursor.
 func (m *migrator) scan(query string, fn func(*sql.Rows) error) error {
 	rows, err := m.target.QueryContext(m.ctx, query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := fn(rows); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+// scanLegacy is scan over the read-only legacy database.
+func (m *migrator) scanLegacy(query string, fn func(*sql.Rows) error) error {
+	rows, err := m.legacy.QueryContext(m.ctx, query)
 	if err != nil {
 		return err
 	}
@@ -600,15 +655,19 @@ func (m *migrator) migrateWorks() error {
 
 // ---------------------------------------------------------------- assets ---
 
-// legacyKind maps old asset_kind values onto the v2 contract
-// (video|cover|metadata). image and live_photo both render as pictures, so
-// they land in the cover slot.
+// legacyKind maps old asset_kind values onto the v2 contract. image stills
+// become kind=image with a 4-digit sequence; live_photo rows (the old
+// archiver stored them as video/mp4 motion clips) become kind=video with a
+// "live%04d" quality - the same shape the v2 downloader produces for gallery
+// works - so the slideshow player renders them correctly.
 func legacyKind(kind string) (string, bool) {
 	switch kind {
 	case "video":
 		return "video", true
-	case "image", "live_photo":
-		return "cover", true
+	case "image":
+		return "image", true
+	case "live_photo":
+		return "live", true // v2 kind=video with "live"+sequence quality
 	case "metadata":
 		return "metadata", true
 	}
@@ -696,8 +755,29 @@ func (m *migrator) migrateAssets() error {
 		stored := legacyPrefix + "/" + filepath.ToSlash(objectKey)
 		full := filepath.Join(legacyRoot, filepath.FromSlash(objectKey))
 
+		// Gallery rows carry their preloaded sequence number as quality;
+		// live clips land in the video kind with a "live%04d" quality.
+		liveClip := newKind == "live"
 		quality := sql.NullString{}
-		if newKind == "video" {
+		if newKind == "image" {
+			seq, ok := m.imgSeq[oldWork][objectKey]
+			if !ok {
+				m.warn("asset %s: no gallery sequence for work %d, skipping", objectKey, oldWork)
+				m.rep.Assets.Skipped++
+				continue
+			}
+			quality = sql.NullString{String: fmt.Sprintf("%04d", seq), Valid: true}
+			newKind = "image"
+		} else if liveClip {
+			seq, ok := m.liveSeq[oldWork][objectKey]
+			if !ok {
+				m.warn("asset %s: no live sequence for work %d, skipping", objectKey, oldWork)
+				m.rep.Assets.Skipped++
+				continue
+			}
+			quality = sql.NullString{String: fmt.Sprintf("live%04d", seq), Valid: true}
+			newKind = "video"
+		} else if newKind == "video" {
 			if q := normalizeQuality(actual, requested); q != "" {
 				quality = sql.NullString{String: q, Valid: true}
 			}
@@ -733,9 +813,10 @@ func (m *migrator) migrateAssets() error {
 		}
 		m.rep.Assets.Migrated++
 
-		if newKind == "video" {
+		if newKind == "video" && !liveClip {
 			// Register the validated video for the download_jobs rebuild; the
-			// first (newest, thanks to the DESC ordering) row wins.
+			// first (newest, thanks to the DESC ordering) row wins. Live
+			// clips never qualify (see preload).
 			if _, ok := m.valid[ref.id]; !ok {
 				m.valid[ref.id] = videoRef{quality: quality.String, size: size}
 			}
@@ -751,6 +832,24 @@ func (m *migrator) migrateAssets() error {
 }
 
 // ------------------------------------------------------------------ jobs ---
+
+// applyWorkTypes infers works.type from the migrated assets (stage 9): any
+// work holding image assets is a gallery (type='image'); the rest keep the
+// 'video' default. Idempotent and safe for works already present in the
+// target: the v2 downloader records image assets only on image works.
+func (m *migrator) applyWorkTypes() error {
+	res, err := m.target.ExecContext(m.ctx, `
+		UPDATE works SET type = 'image'
+		WHERE type <> 'image' AND id IN (
+			SELECT DISTINCT work_id FROM assets WHERE kind = 'image')`)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("[import-legacy] works: %d row(s) marked type='image' (gallery assets)", n)
+	}
+	return nil
+}
 
 func (m *migrator) migrateJobs() error {
 	rows, err := m.legacy.QueryContext(m.ctx, `

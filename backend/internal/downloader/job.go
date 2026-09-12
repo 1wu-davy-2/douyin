@@ -4,12 +4,12 @@ package downloader
 //
 //	claim (queued -> downloading, attempts+1)
 //	  -> provider.WorkDetail refresh (90s budget; failure -> failed)
-//	  -> variant pick (exact quality, else closest lower, else highest)
-//	  -> stream video to <data_dir>/downloads/{nickname}_{sec_uid}/{collections|singles}/title.mp4
-//	     (.part then rename; progress tracked in memory only)
+//	  -> video works:                         image works (stage 9):
+//	    variant pick (quality ladder)           gallery aggregation directory
+//	    stream title.mp4                        0001.jpg.. 000N.jpg (+ live0001.mp4..)
 //	  -> cover (best effort; failure only logged)
-//	  -> metadata.json (normalized WorkDetail JSON)
-//	  -> assets upsert (video / cover / metadata)
+//	  -> metadata json
+//	  -> assets upsert (video|image / cover / metadata)
 //	  -> succeeded
 //
 // Cancellation: a user cancel (Cancel -> job ctx canceled) ends the transfer,
@@ -46,6 +46,7 @@ type jobRow struct {
 	Attempts     int
 	ItemID       string
 	Title        string
+	WorkType     string
 	Nickname     string
 	SecUID       string
 	CollectionID sql.NullInt64
@@ -53,7 +54,7 @@ type jobRow struct {
 
 const selectJob = `
 	SELECT j.id, j.work_id, j.creator_id, j.status, j.quality, j.attempts,
-	       w.item_id, w.title, c.nickname, c.sec_uid, w.collection_id
+	       w.item_id, w.title, w.type, c.nickname, c.sec_uid, w.collection_id
 	FROM download_jobs j
 	JOIN works w    ON w.id = j.work_id
 	LEFT JOIN creators c ON c.id = w.creator_id
@@ -63,7 +64,7 @@ func scanJob(row *sql.Row) (*jobRow, error) {
 	var j jobRow
 	var nickname, secUID sql.NullString
 	err := row.Scan(&j.ID, &j.WorkID, &j.CreatorID, &j.Status, &j.Quality, &j.Attempts,
-		&j.ItemID, &j.Title, &nickname, &secUID, &j.CollectionID)
+		&j.ItemID, &j.Title, &j.WorkType, &nickname, &secUID, &j.CollectionID)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +119,8 @@ func (d *Downloader) runJob(jobID int64) {
 	d.process(ctx, job)
 }
 
-// process runs the claimed job to a terminal state.
+// process runs the claimed job to a terminal state, dispatching on the work
+// type (stage 9: image/gallery works aggregate into a title directory).
 func (d *Downloader) process(ctx context.Context, job *jobRow) {
 	// 1. Refresh media addresses (90s budget).
 	prov := d.src.Resolve(ctx)
@@ -134,6 +136,23 @@ func (d *Downloader) process(ctx context.Context, job *jobRow) {
 		return
 	}
 
+	// The fresh detail type wins; the scanned works.type is the fallback for
+	// providers that predate the additive field.
+	workType := detail.Type
+	if workType == "" {
+		workType = job.WorkType
+	}
+	if workType == provider.TypeImage {
+		d.processImageWork(ctx, job, detail)
+		return
+	}
+	d.processVideoWork(ctx, job, detail)
+}
+
+// processVideoWork downloads one variant of a video work to
+// <data>/downloads/{creator}/{collections|singles}/title.mp4 and records
+// video/cover/metadata assets.
+func (d *Downloader) processVideoWork(ctx context.Context, job *jobRow, detail *provider.WorkDetail) {
 	// 2. Pick the variant for the requested quality.
 	variant := pickVariant(detail.Variants, job.Quality)
 	if variant == nil {
@@ -183,6 +202,7 @@ func (d *Downloader) process(ctx context.Context, job *jobRow) {
 	// 6. metadata.json (normalized WorkDetail JSON).
 	metaPath, err := writeMetadata(dir, target, detail, job, variant)
 	if err != nil {
+		d.removeTracker(job.ID)
 		d.failJob(ctx, job, "write metadata: "+err.Error())
 		return
 	}
@@ -198,6 +218,7 @@ func (d *Downloader) process(ctx context.Context, job *jobRow) {
 		coverSize: coverSize,
 		metadata:  metaPath,
 	}); err != nil {
+		d.removeTracker(job.ID)
 		d.failJob(ctx, job, "record assets: "+err.Error())
 		return
 	}
@@ -213,6 +234,194 @@ func (d *Downloader) process(ctx context.Context, job *jobRow) {
 	}
 	log.Printf("[downloader] job %d: succeeded %s (%d bytes, %s)", job.ID, filepath.Base(target), written, variant.Quality)
 	d.publishStatus(job.ID, job.WorkID, StatusSucceeded, nil)
+}
+
+// processImageWork downloads an image (gallery) work into the aggregated
+// title directory
+//
+//	<data>/downloads/{creator}/{collections|singles}/{safeName(title)}/
+//
+// as 0001.jpg..000N.jpg (extension inferred from the URL) plus optional
+// live0001.mp4 live segments, a fixed cover.jpg and metadata.json. Assets:
+// kind=image with 4-digit sequence quality, live segments kind=video with
+// "live"+sequence quality. Progress is file-based (completed files / total
+// files in the tracker; bytes accumulate for the job's final totals).
+func (d *Downloader) processImageWork(ctx context.Context, job *jobRow, detail *provider.WorkDetail) {
+	if len(detail.Images) == 0 {
+		d.failJob(ctx, job, "image work returned no image addresses")
+		return
+	}
+
+	// Aggregated gallery directory (one level deeper than video works).
+	dir := filepath.Join(job.collectionBase(d.dataDir), safeName(job.Title, maxTitleLength))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		d.failJob(ctx, job, "create directory: "+err.Error())
+		return
+	}
+
+	totalFiles := len(detail.Images) + len(detail.LiveVideos)
+	tr := d.addTracker(job.ID, int64(totalFiles))
+
+	// media collects every produced file for the asset upsert.
+	media := make([]galleryAsset, 0, totalFiles)
+	var totalBytes int64
+	done := 0
+
+	// Gallery images in original order -> 0001.. with URL-inferred extension.
+	// Every CDN candidate is tried in order before the image counts as failed.
+	for i, img := range detail.Images {
+		if ctx.Err() != nil {
+			d.removeTracker(job.ID)
+			d.aborted(ctx, job)
+			return
+		}
+		name := fmt.Sprintf("%04d%s", i+1, extFromURL(img.URL, ".jpg"))
+		var size int64
+		var lastErr error
+		for _, candidate := range img.Candidates() {
+			size, lastErr = d.downloadGalleryFile(ctx, job.ID, candidate, dir, name)
+			if lastErr == nil {
+				break
+			}
+			if ctx.Err() != nil {
+				break
+			}
+			log.Printf("[downloader] job %d: image %s candidate failed (%v), trying next", job.ID, name, lastErr)
+		}
+		if lastErr != nil {
+			d.removeTracker(job.ID)
+			if ctx.Err() != nil { // user cancel or shutdown
+				d.aborted(ctx, job)
+				return
+			}
+			d.failJob(ctx, job, fmt.Sprintf("download image %s: %v", name, lastErr))
+			return
+		}
+		totalBytes += size
+		done++
+		tr.downloaded.Store(int64(done))
+		media = append(media, galleryAsset{kind: "image", quality: fmt.Sprintf("%04d", i+1),
+			path: filepath.Join(dir, name), size: size})
+	}
+
+	// Live segments -> live0001.mp4..., kind=video, quality "live"+sequence.
+	for i, lv := range detail.LiveVideos {
+		if ctx.Err() != nil {
+			d.removeTracker(job.ID)
+			d.aborted(ctx, job)
+			return
+		}
+		quality := fmt.Sprintf("live%04d", i+1)
+		name := quality + extFromURL(lv.URL, ".mp4")
+		var size int64
+		var lastErr error
+		for _, candidate := range lv.Candidates() {
+			size, lastErr = d.downloadGalleryFile(ctx, job.ID, candidate, dir, name)
+			if lastErr == nil {
+				break
+			}
+			if ctx.Err() != nil {
+				break
+			}
+			log.Printf("[downloader] job %d: live %s candidate failed (%v), trying next", job.ID, name, lastErr)
+		}
+		if lastErr != nil {
+			d.removeTracker(job.ID)
+			if ctx.Err() != nil {
+				d.aborted(ctx, job)
+				return
+			}
+			d.failJob(ctx, job, fmt.Sprintf("download live %s: %v", name, lastErr))
+			return
+		}
+		totalBytes += size
+		done++
+		tr.downloaded.Store(int64(done))
+		media = append(media, galleryAsset{kind: "video", quality: quality,
+			path: filepath.Join(dir, name), size: size})
+	}
+
+	// Cover (best effort, fixed cover.jpg name) and metadata.json.
+	coverPath, coverSize := d.fetchCoverFixed(ctx, dir, "cover.jpg", detail.CoverURL)
+	metaPath, err := writeGalleryMetadata(dir, detail, job)
+	if err != nil {
+		d.removeTracker(job.ID)
+		d.failJob(ctx, job, "write metadata: "+err.Error())
+		return
+	}
+
+	if err := d.upsertGalleryAssets(ctx, job, media, coverPath, coverSize, metaPath); err != nil {
+		d.removeTracker(job.ID)
+		d.failJob(ctx, job, "record assets: "+err.Error())
+		return
+	}
+
+	// Succeeded: the job row carries the accumulated byte totals; the enqueued
+	// quality column is left untouched (quality does not apply to galleries).
+	d.removeTracker(job.ID)
+	finished := nowRFC3339()
+	if _, err := d.db.ExecContext(ctx, `
+		UPDATE download_jobs SET status = ?, finished_at = ?, total_bytes = ?, downloaded_bytes = ?
+		WHERE id = ?`, StatusSucceeded, finished, totalBytes, totalBytes, job.ID); err != nil {
+		log.Printf("[downloader] job %d: finalize succeeded: %v", job.ID, err)
+	}
+	log.Printf("[downloader] job %d: succeeded gallery %s (%d file(s), %d bytes)",
+		job.ID, safeName(job.Title, maxTitleLength), totalFiles, totalBytes)
+	d.publishStatus(job.ID, job.WorkID, StatusSucceeded, nil)
+}
+
+// extFromURL infers a file extension from a media URL (query/fragment
+// stripped, lowercase); anything unrecognized falls back to def.
+func extFromURL(rawURL, def string) string {
+	u := rawURL
+	if i := strings.IndexAny(u, "?#"); i >= 0 {
+		u = u[:i]
+	}
+	switch ext := strings.ToLower(filepath.Ext(u)); ext {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".mov", ".m4v", ".webm":
+		return ext
+	default:
+		return def
+	}
+}
+
+// galleryMetadataDoc is the normalized WorkDetail JSON written as the fixed
+// metadata.json inside a gallery directory.
+type galleryMetadataDoc struct {
+	WorkID     int64                `json:"work_id"`
+	ItemID     string               `json:"item_id"`
+	Title      string               `json:"title"`
+	Type       string               `json:"type"`
+	Duration   int                  `json:"duration"`
+	CoverURL   string               `json:"cover_url"`
+	Downloaded string               `json:"downloaded_at"`
+	Images     []provider.WorkImage `json:"images"`
+	LiveVideos []provider.LiveVideo `json:"live_videos,omitempty"`
+}
+
+// writeGalleryMetadata persists the normalized detail JSON as the fixed
+// metadata.json (overwritten on re-download, like the gallery media files).
+func writeGalleryMetadata(dir string, detail *provider.WorkDetail, job *jobRow) (string, error) {
+	path := filepath.Join(dir, "metadata.json")
+	doc := galleryMetadataDoc{
+		WorkID:     job.WorkID,
+		ItemID:     detail.ItemID,
+		Title:      detail.Title,
+		Type:       provider.TypeImage,
+		Duration:   detail.Duration,
+		CoverURL:   detail.CoverURL,
+		Downloaded: nowRFC3339(),
+		Images:     detail.Images,
+		LiveVideos: detail.LiveVideos,
+	}
+	raw, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // aborted finishes a canceled transfer. User cancel -> status=canceled +
@@ -280,6 +489,26 @@ func (d *Downloader) mediaHeaders() http.Header {
 // and renames it into place, returning the final path. On error the .part
 // file is removed (cancel/abort leaves nothing behind).
 func (d *Downloader) downloadVideo(ctx context.Context, jobID int64, rawURL, dir, name string, tr *tracker) (int64, string, error) {
+	return d.streamToFile(ctx, jobID, rawURL, dir, name, tr, false)
+}
+
+// downloadGalleryFile streams url into dir/name verbatim: image galleries use
+// deterministic names (0001.jpg, live0001.mp4) that overwrite on re-download.
+// tr stays nil: gallery progress is counted per finished file by the caller,
+// not per byte inside one transfer.
+func (d *Downloader) downloadGalleryFile(ctx context.Context, jobID int64, rawURL, dir, name string) (int64, error) {
+	written, _, err := d.streamToFile(ctx, jobID, rawURL, dir, name, nil, true)
+	return written, err
+}
+
+// streamToFile GETs rawURL (media headers) and streams the body into dir/name
+// through a .<jobID>.part file, then renames it into place. fixed=false
+// re-picks name-(2).ext under the reservation lock (video layout: concurrent
+// same-title jobs must not collapse); fixed=true writes the name verbatim and
+// overwrites (gallery layout: deterministic 0001.jpg targets). tr may be nil
+// (gallery transfers are counted per file by the caller). Returns the written
+// byte count and the final path.
+func (d *Downloader) streamToFile(ctx context.Context, jobID int64, rawURL, dir, name string, tr *tracker, fixed bool) (int64, string, error) {
 	url := d.resolveMedia(rawURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -296,8 +525,10 @@ func (d *Downloader) downloadVideo(ctx context.Context, jobID int64, rawURL, dir
 	if resp.StatusCode != http.StatusOK {
 		return 0, "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	if n := resp.ContentLength; n > 0 {
-		tr.total.Store(n)
+	if tr != nil {
+		if n := resp.ContentLength; n > 0 {
+			tr.total.Store(n)
+		}
 	}
 
 	part := filepath.Join(dir, fmt.Sprintf("%s.%d.part", name, jobID))
@@ -323,7 +554,9 @@ func (d *Downloader) downloadVideo(ctx context.Context, jobID int64, rawURL, dir
 				break
 			}
 			written += int64(n)
-			tr.downloaded.Store(written)
+			if tr != nil {
+				tr.downloaded.Store(written)
+			}
 		}
 		switch {
 		case rerr != nil && errors.Is(rerr, io.EOF):
@@ -349,9 +582,15 @@ func (d *Downloader) downloadVideo(ctx context.Context, jobID int64, rawURL, dir
 	}
 
 	nameMu.Lock()
-	final, err := uniquePath(dir, name) // re-pick under the lock: winner exists now
-	if err == nil {
+	var final string
+	if fixed {
+		final = filepath.Join(dir, name) // deterministic target, may overwrite
 		err = os.Rename(part, final)
+	} else {
+		final, err = uniquePath(dir, name) // re-pick under the lock: winner exists now
+		if err == nil {
+			err = os.Rename(part, final)
+		}
 	}
 	nameMu.Unlock()
 	if err != nil {
@@ -362,12 +601,40 @@ func (d *Downloader) downloadVideo(ctx context.Context, jobID int64, rawURL, dir
 }
 
 // fetchCover downloads the cover image (best effort). Returns the path and
-// size, or ("", 0) when skipped/failed.
+// size, or ("", 0) when skipped/failed. The extension is picked from the URL
+// (unknown -> .jpg) and conflicts get a -(2) sequence number (video layout).
 func (d *Downloader) fetchCover(ctx context.Context, dir, stem, coverURL string) (string, int64) {
 	if strings.TrimSpace(coverURL) == "" {
 		return "", 0
 	}
-	url := d.resolveMedia(coverURL)
+	ext := strings.ToLower(filepath.Ext(coverURL))
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
+	default:
+		ext = ".jpg"
+	}
+	target, err := uniquePath(dir, stem+ext)
+	if err != nil {
+		log.Printf("[downloader] cover: resolve target: %v", err)
+		return "", 0
+	}
+	return d.fetchToFile(ctx, target, coverURL)
+}
+
+// fetchCoverFixed writes dir/name verbatim: image galleries keep the
+// deterministic cover.jpg name and overwrite it on re-download.
+func (d *Downloader) fetchCoverFixed(ctx context.Context, dir, name, coverURL string) (string, int64) {
+	if strings.TrimSpace(coverURL) == "" {
+		return "", 0
+	}
+	return d.fetchToFile(ctx, filepath.Join(dir, name), coverURL)
+}
+
+// fetchToFile performs the best-effort cover/gallery fetch: GET with media
+// headers, stream into target, remove the file on any failure. Returns the
+// target path and written size, or ("", 0).
+func (d *Downloader) fetchToFile(ctx context.Context, target, rawURL string) (string, int64) {
+	url := d.resolveMedia(rawURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		log.Printf("[downloader] cover: build request: %v", err)
@@ -387,17 +654,6 @@ func (d *Downloader) fetchCover(ctx context.Context, dir, stem, coverURL string)
 		return "", 0
 	}
 
-	ext := strings.ToLower(filepath.Ext(url))
-	switch ext {
-	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
-	default:
-		ext = ".jpg"
-	}
-	target, err := uniquePath(dir, stem+ext)
-	if err != nil {
-		log.Printf("[downloader] cover: resolve target: %v", err)
-		return "", 0
-	}
 	f, err := os.Create(target)
 	if err != nil {
 		log.Printf("[downloader] cover: create: %v", err)
@@ -417,14 +673,14 @@ func (d *Downloader) fetchCover(ctx context.Context, dir, stem, coverURL string)
 
 // metadataDoc is the normalized WorkDetail JSON written next to the video.
 type metadataDoc struct {
-	WorkID     int64             `json:"work_id"`
-	ItemID     string            `json:"item_id"`
-	Title      string            `json:"title"`
-	Duration   int               `json:"duration"`
-	Quality    string            `json:"selected_quality"`
-	SizeBytes  int64             `json:"selected_size_bytes"`
-	CoverURL   string            `json:"cover_url"`
-	Downloaded string            `json:"downloaded_at"`
+	WorkID     int64              `json:"work_id"`
+	ItemID     string             `json:"item_id"`
+	Title      string             `json:"title"`
+	Duration   int                `json:"duration"`
+	Quality    string             `json:"selected_quality"`
+	SizeBytes  int64              `json:"selected_size_bytes"`
+	CoverURL   string             `json:"cover_url"`
+	Downloaded string             `json:"downloaded_at"`
 	Variants   []provider.Variant `json:"variants"`
 }
 
@@ -510,10 +766,74 @@ func (d *Downloader) upsertAssets(ctx context.Context, job *jobRow, f assetFiles
 	})
 }
 
+// galleryAsset is one produced gallery media file awaiting its asset row.
+type galleryAsset struct {
+	kind    string // "image" or "video" (live segments)
+	quality string // "0001"-style sequence or "live0001"
+	path    string
+	size    int64
+}
+
+// upsertGalleryAssets records the asset rows of an image work in one
+// transaction. The gallery media set is replaced wholesale (stale rows from a
+// previous, larger download must not linger), cover/metadata keep the
+// delete+insert convention of the video layout.
+func (d *Downloader) upsertGalleryAssets(ctx context.Context, job *jobRow, media []galleryAsset, cover string, coverSize int64, metadata string) error {
+	fctx := context.WithoutCancel(ctx)
+	now := nowRFC3339()
+	metaSize := int64(0)
+	if fi, err := os.Stat(metadata); err == nil {
+		metaSize = fi.Size()
+	}
+	return db.WithTx(fctx, d.db, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(fctx,
+			`DELETE FROM assets WHERE work_id = ? AND kind IN ('image', 'video')`, job.WorkID); err != nil {
+			return fmt.Errorf("clear gallery assets: %w", err)
+		}
+		for _, m := range media {
+			if _, err := tx.ExecContext(fctx, `
+				INSERT INTO assets (work_id, kind, path, size_bytes, quality, created_at)
+				VALUES (?, ?, ?, ?, ?, ?)`,
+				job.WorkID, m.kind, d.relPath(m.path), m.size, m.quality, now); err != nil {
+				return fmt.Errorf("%s asset %s: %w", m.kind, m.quality, err)
+			}
+		}
+		for _, a := range []struct {
+			kind string
+			path string
+			size int64
+		}{
+			{"cover", cover, coverSize},
+			{"metadata", metadata, metaSize},
+		} {
+			if a.path == "" {
+				continue
+			}
+			if _, err := tx.ExecContext(fctx,
+				`DELETE FROM assets WHERE work_id = ? AND kind = ? AND quality IS NULL`, job.WorkID, a.kind); err != nil {
+				return fmt.Errorf("clear %s asset: %w", a.kind, err)
+			}
+			if _, err := tx.ExecContext(fctx, `
+				INSERT INTO assets (work_id, kind, path, size_bytes, quality, created_at)
+				VALUES (?, ?, ?, ?, NULL, ?)`, job.WorkID, a.kind, d.relPath(a.path), a.size, now); err != nil {
+				return fmt.Errorf("%s asset: %w", a.kind, err)
+			}
+		}
+		return nil
+	})
+}
+
 // ------------------------------------------------------------------ paths --
 
 // directory renders <dataDir>/downloads/{nickname}_{sec_uid}/{collections|singles}.
 func (j *jobRow) directory(dataDir string) string {
+	return j.collectionBase(dataDir)
+}
+
+// collectionBase renders the per-creator bucket directory
+// <dataDir>/downloads/{nickname}_{sec_uid}/{collections|singles}; image works
+// append one more segment (safeName(title)) to aggregate the gallery.
+func (j *jobRow) collectionBase(dataDir string) string {
 	sub := "singles"
 	if j.CollectionID.Valid {
 		sub = "collections"

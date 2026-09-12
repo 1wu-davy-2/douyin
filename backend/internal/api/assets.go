@@ -3,7 +3,8 @@ package api
 // Asset streaming endpoints (docs/api.md "资产与播放 Assets"). Replaces the
 // stage-1 placeholder.
 //
-//	GET /api/works/{id}/assets   -> asset list (video assets first)
+//	GET /api/works/{id}/assets   -> asset list (video -> image -> cover ->
+//	                               metadata per the v1.1 ordering)
 //	GET /api/assets/{id}/content -> stream the file with native Range support
 //	                               (http.ServeContent)
 //
@@ -40,7 +41,16 @@ type workAsset struct {
 	CreatedAt string  `json:"created_at"`
 }
 
-// handleWorkAssets GET /api/works/{id}/assets — video assets first.
+// assetOrder is the contract ordering for every asset list
+// (docs/api.md v1.1): video assets newest-first (a live-photo clip of an
+// image work is a video asset too) -> image assets by their 4-digit quality
+// sequence ascending -> cover -> metadata.
+const assetOrder = `
+ORDER BY CASE kind WHEN 'video' THEN 0 WHEN 'image' THEN 1 WHEN 'cover' THEN 2 ELSE 3 END,
+         CASE WHEN kind = 'video' THEN -id ELSE 0 END,
+         CASE WHEN kind = 'image' THEN COALESCE(quality, '') ELSE '' END`
+
+// handleWorkAssets GET /api/works/{id}/assets — ordered per the contract.
 func (s *Server) handleWorkAssets(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	if !ok {
@@ -49,7 +59,7 @@ func (s *Server) handleWorkAssets(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.deps.DB.QueryContext(r.Context(), `
 		SELECT id, work_id, kind, path, size_bytes, quality, created_at
 		FROM assets WHERE work_id = ?
-		ORDER BY CASE kind WHEN 'video' THEN 0 ELSE 1 END, id`, id)
+		`+assetOrder, id)
 	if err != nil {
 		writeInternalError(w, err)
 		return

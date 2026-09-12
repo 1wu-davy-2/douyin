@@ -79,7 +79,7 @@ type EnqueueSkip struct {
 
 // EnqueueResult is the POST /api/downloads response payload.
 type EnqueueResult struct {
-	Created []int64      `json:"created"`
+	Created []int64       `json:"created"`
 	Skipped []EnqueueSkip `json:"skipped"`
 }
 

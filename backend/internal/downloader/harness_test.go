@@ -6,8 +6,8 @@ package downloader
 
 import (
 	"context"
-	"errors"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -31,8 +31,8 @@ type fakeCDN struct {
 	srv *httptest.Server
 
 	mu          sync.Mutex
-	inflight    int           // total requests being served right now
-	maxInflight int           // peak of the counter above
+	inflight    int // total requests being served right now
+	maxInflight int // peak of the counter above
 	requests    []string
 
 	chunkDelay time.Duration
@@ -286,6 +286,23 @@ func (h *harness) work(creatorID int64, itemID, title string, collectionID any) 
 		creatorID, collectionID, itemID, title, nowRFC3339(), nowRFC3339())
 	if err != nil {
 		h.t.Fatalf("insert work: %v", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return id
+}
+
+// imageWork inserts a works row typed as a gallery (stage 9).
+func (h *harness) imageWork(creatorID int64, itemID, title string, collectionID any) int64 {
+	h.t.Helper()
+	res, err := h.db.Exec(`
+		INSERT INTO works (creator_id, collection_id, item_id, title, type, duration, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 'image', 0, ?, ?)`,
+		creatorID, collectionID, itemID, title, nowRFC3339(), nowRFC3339())
+	if err != nil {
+		h.t.Fatalf("insert image work: %v", err)
 	}
 	id, err := res.LastInsertId()
 	if err != nil {

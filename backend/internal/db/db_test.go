@@ -31,8 +31,52 @@ func TestMigrateIdempotent(t *testing.T) {
 	if err := handle.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != 1 {
-		t.Fatalf("user_version = %d, want 1", version)
+	if version != 2 {
+		t.Fatalf("user_version = %d, want 2", version)
+	}
+}
+
+// Migration 0002: works.type exists, defaults to 'video' for pre-existing
+// rows and accepts 'image' for gallery works.
+func TestMigrateWorkType(t *testing.T) {
+	handle := openTestDB(t)
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := Migrate(handle); err != nil {
+		t.Fatalf("re-migrate (must be a no-op): %v", err)
+	}
+
+	ctx := context.Background()
+	if _, err := handle.ExecContext(ctx,
+		`INSERT INTO creators(id, sec_uid, created_at) VALUES (1, 'secA', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	// Omitted type -> the 'video' default (pre-upgrade rows keep working).
+	if _, err := handle.ExecContext(ctx,
+		`INSERT INTO works(id, creator_id, item_id, created_at, updated_at)
+		 VALUES (1, 1, 'itemV', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	var videoType string
+	if err := handle.QueryRow(`SELECT type FROM works WHERE id = 1`).Scan(&videoType); err != nil {
+		t.Fatal(err)
+	}
+	if videoType != "video" {
+		t.Fatalf("default type = %q, want video", videoType)
+	}
+	// Explicit image type is accepted.
+	if _, err := handle.ExecContext(ctx,
+		`INSERT INTO works(id, creator_id, item_id, type, created_at, updated_at)
+		 VALUES (2, 1, 'itemI', 'image', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	var imageType string
+	if err := handle.QueryRow(`SELECT type FROM works WHERE id = 2`).Scan(&imageType); err != nil {
+		t.Fatal(err)
+	}
+	if imageType != "image" {
+		t.Fatalf("image type = %q, want image", imageType)
 	}
 }
 

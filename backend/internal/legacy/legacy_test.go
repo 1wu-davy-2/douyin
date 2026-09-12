@@ -14,8 +14,10 @@ import (
 
 // fixture builds a miniature legacy v1 database plus a downloads tree:
 //
-//	creator 1 (wen) with collection 10 and works 100 (complete, quality 720)
-//	and work 101 (video row present but the file is missing on disk).
+//	creator 1 (wen) with collection 10, works 100 (complete video, quality
+//	720) and 101 (video row present but the file is missing on disk), plus
+//	the gallery work 102 (two image stills + one live_photo clip, a
+//	succeeded job without a downloadable video tier).
 func fixture(t *testing.T) (legacyDB, downloads, dataDir string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -75,22 +77,33 @@ func fixture(t *testing.T) (legacyDB, downloads, dataDir string) {
 		 VALUES (100, 1, 10, 'item-100', '视频一', '2026-07-18T07:42:32+00:00', 'http://cover/100', 65000, '2026-07-19T07:01:00+00:00')`,
 		`INSERT INTO works (id, creator_id, collection_id, item_id, title, published_at, cover_url, duration, first_seen_at)
 		 VALUES (101, 1, NULL, 'item-101', '视频二', '2026-07-16T09:42:28+00:00', 'http://cover/101', 0, '2026-07-19T07:02:00+00:00')`,
+		`INSERT INTO works (id, creator_id, collection_id, item_id, title, published_at, cover_url, duration, first_seen_at)
+		 VALUES (102, 1, NULL, 'item-102', '图集一', '2026-07-15T09:42:28+00:00', 'http://cover/102', 0, '2026-07-19T07:02:30+00:00')`,
 		`INSERT INTO download_jobs (id, work_id, status, progress_bytes, total_bytes, attempts, created_at, started_at, finished_at, requested_quality, actual_quality)
 		 VALUES (50, 100, 'succeeded', 1000, 1000, 1, '2026-07-19T07:03:00+00:00', '2026-07-19T07:03:01+00:00', '2026-07-19T07:03:30+00:00', 'highest', '720')`,
 		`INSERT INTO download_jobs (id, work_id, status, progress_bytes, total_bytes, attempts, created_at, started_at, finished_at, requested_quality, actual_quality)
 		 VALUES (51, 101, 'succeeded', 0, 0, 2, '2026-07-19T07:04:00+00:00', '2026-07-19T07:04:01+00:00', '2026-07-19T07:04:30+00:00', 'highest', NULL)`,
 		`INSERT INTO download_jobs (id, work_id, status, attempts, created_at, requested_quality, actual_quality)
 		 VALUES (52, 100, 'failed', 1, '2026-07-19T07:02:00+00:00', 'highest', NULL)`,
-		// Work 100: video (exists on disk), metadata, cover image.
+		`INSERT INTO download_jobs (id, work_id, status, progress_bytes, total_bytes, attempts, created_at, started_at, finished_at, requested_quality, actual_quality)
+		 VALUES (53, 102, 'succeeded', 800, 800, 1, '2026-07-19T07:05:00+00:00', '2026-07-19T07:05:01+00:00', '2026-07-19T07:05:30+00:00', 'highest', NULL)`,
+		// Work 100: video (exists on disk) and metadata.
 		`INSERT INTO work_assets (id, work_id, job_id, asset_kind, object_key, file_size, created_at)
 		 VALUES (60, 100, 50, 'video', 'wen_/singles/a.mp4', 1000, '2026-07-19T07:03:30+00:00')`,
 		`INSERT INTO work_assets (id, work_id, job_id, asset_kind, object_key, file_size, created_at)
 		 VALUES (61, 100, 50, 'metadata', 'wen_/singles/a.json', 200, '2026-07-19T07:03:30+00:00')`,
-		`INSERT INTO work_assets (id, work_id, job_id, asset_kind, object_key, file_size, created_at)
-		 VALUES (62, 100, NULL, 'image', 'wen_/singles/a.jpg', 300, '2026-07-19T07:03:31+00:00')`,
 		// Work 101: video row exists but the file is NOT on disk.
 		`INSERT INTO work_assets (id, work_id, job_id, asset_kind, object_key, file_size, created_at)
 		 VALUES (63, 101, 51, 'video', 'wen_/singles/b.mp4', 999, '2026-07-19T07:04:30+00:00')`,
+		// Work 102 (gallery): two image stills plus one live_photo clip
+		// (video/mp4 in the real corpus). created_at order interleaves the
+		// kinds to prove the sequences are numbered per kind.
+		`INSERT INTO work_assets (id, work_id, job_id, asset_kind, object_key, file_size, created_at)
+		 VALUES (64, 102, 53, 'image', 'wen_/singles/g1.webp', 300, '2026-07-19T08:00:01+00:00')`,
+		`INSERT INTO work_assets (id, work_id, job_id, asset_kind, object_key, file_size, created_at)
+		 VALUES (65, 102, 53, 'live_photo', 'wen_/singles/g1_live.mp4', 400, '2026-07-19T08:00:02+00:00')`,
+		`INSERT INTO work_assets (id, work_id, job_id, asset_kind, object_key, file_size, created_at)
+		 VALUES (66, 102, 53, 'image', 'wen_/singles/g2.webp', 350, '2026-07-19T08:00:03+00:00')`,
 	}
 	for _, s := range seed {
 		if _, err := h.Exec(s); err != nil {
@@ -98,11 +111,14 @@ func fixture(t *testing.T) (legacyDB, downloads, dataDir string) {
 		}
 	}
 
-	// Downloads tree: only work 100's files exist on disk.
+	// Downloads tree: only work 100's files and work 102's gallery exist.
 	if err := os.MkdirAll(filepath.Join(downloads, "wen_", "singles"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for name, size := range map[string]int{"a.mp4": 1000, "a.json": 200, "a.jpg": 300} {
+	for name, size := range map[string]int{
+		"a.mp4": 1000, "a.json": 200,
+		"g1.webp": 300, "g2.webp": 350, "g1_live.mp4": 400,
+	} {
 		if err := os.WriteFile(filepath.Join(downloads, "wen_", "singles", name), make([]byte, size), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -139,19 +155,21 @@ func TestRunMigratesAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if rep.Creators.Migrated != 1 || rep.Collections.Migrated != 1 || rep.Works.Migrated != 2 {
+	if rep.Creators.Migrated != 1 || rep.Collections.Migrated != 1 || rep.Works.Migrated != 3 {
 		t.Fatalf("first run counts: %+v", rep)
 	}
-	// Assets: video+metadata+cover of work 100; work 101's video is missing.
-	if rep.Assets.Migrated != 3 || rep.MissingFiles != 1 {
+	// Assets: video+metadata of work 100 plus the three gallery rows of work
+	// 102; work 101's video is missing on disk.
+	if rep.Assets.Migrated != 5 || rep.MissingFiles != 1 {
 		t.Fatalf("assets: migrated=%d missing=%d (%+v)", rep.Assets.Migrated, rep.MissingFiles, rep)
 	}
-	// Only work 100's succeeded job has a validated video.
-	if rep.Jobs.Migrated != 1 || rep.SkippedNoVid != 1 || rep.SkippedOther != 1 {
+	// Only work 100's succeeded job has a validated video tier (work 102's
+	// gallery assets do not qualify).
+	if rep.Jobs.Migrated != 1 || rep.SkippedNoVid != 2 || rep.SkippedOther != 1 {
 		t.Fatalf("jobs: migrated=%d noVid=%d other=%d (%+v)", rep.Jobs.Migrated, rep.SkippedNoVid, rep.SkippedOther, rep)
 	}
-	if rep.FilesCopied != 3 {
-		t.Fatalf("files copied = %d, want 3", rep.FilesCopied)
+	if rep.FilesCopied != 5 {
+		t.Fatalf("files copied = %d, want 5", rep.FilesCopied)
 	}
 
 	// Row-level checks.
@@ -164,18 +182,61 @@ func TestRunMigratesAndIsIdempotent(t *testing.T) {
 	if published != "2026-07-18T07:42:32+00:00" || publishedType != "text" {
 		t.Fatalf("published_at not preserved verbatim: %q (%s)", published, publishedType)
 	}
+	// Work types: the gallery work is inferred from its image assets.
+	for item, want := range map[string]string{
+		"item-100": "video", "item-101": "video", "item-102": "image",
+	} {
+		var wt string
+		if err := h.QueryRow(`SELECT type FROM works WHERE item_id = ?`, item).Scan(&wt); err != nil {
+			t.Fatal(err)
+		}
+		if wt != want {
+			t.Fatalf("work %s type = %q, want %q", item, wt, want)
+		}
+	}
 	var kind, path string
 	var quality sql.NullString
-	if err := h.QueryRow(`SELECT kind, path, quality FROM assets WHERE kind='video'`).
+	if err := h.QueryRow(`SELECT kind, path, quality FROM assets WHERE kind='video' AND quality='720p'`).
 		Scan(&kind, &path, &quality); err != nil {
 		t.Fatal(err)
 	}
-	if path != "downloads/legacy/wen_/singles/a.mp4" || !quality.Valid || quality.String != "720p" {
+	if path != "downloads/legacy/wen_/singles/a.mp4" {
 		t.Fatalf("video asset: kind=%s path=%s quality=%v", kind, path, quality)
 	}
+	// Gallery rows: image stills numbered by the old created_at order, the
+	// live_photo clip in the video kind with a live sequence.
+	type assetRow struct{ kind, path, quality string }
+	got := map[string]assetRow{}
+	rows, err := h.Query(`SELECT kind, path, COALESCE(quality, '') FROM assets WHERE work_id IN
+		(SELECT id FROM works WHERE item_id = 'item-102')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var r assetRow
+		if err := rows.Scan(&r.kind, &r.path, &r.quality); err != nil {
+			t.Fatal(err)
+		}
+		got[r.path] = r
+	}
+	rows.Close()
+	wantRows := map[string]assetRow{
+		"downloads/legacy/wen_/singles/g1.webp":     {"image", "downloads/legacy/wen_/singles/g1.webp", "0001"},
+		"downloads/legacy/wen_/singles/g2.webp":     {"image", "downloads/legacy/wen_/singles/g2.webp", "0002"},
+		"downloads/legacy/wen_/singles/g1_live.mp4": {"video", "downloads/legacy/wen_/singles/g1_live.mp4", "live0001"},
+	}
+	for p, w := range wantRows {
+		if g, ok := got[p]; !ok || g != w {
+			t.Fatalf("gallery asset %s = %+v (present=%v), want %+v", p, g, ok, w)
+		}
+	}
+	if len(got) != 3 {
+		t.Fatalf("gallery work has %d assets, want 3 (%v)", len(got), got)
+	}
+	// Nothing folds into the cover slot anymore.
 	var n int
-	if err := h.QueryRow(`SELECT COUNT(*) FROM assets WHERE kind='cover'`).Scan(&n); err != nil || n != 1 {
-		t.Fatalf("cover assets = %d (%v)", n, err)
+	if err := h.QueryRow(`SELECT COUNT(*) FROM assets WHERE kind='cover'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("cover assets = %d (%v), want 0", n, err)
 	}
 	var jobQ, jobStatus string
 	var jobBytes int64
@@ -200,12 +261,12 @@ func TestRunMigratesAndIsIdempotent(t *testing.T) {
 	if rep2.Creators.Migrated+rep2.Collections.Migrated+rep2.Works.Migrated+rep2.Assets.Migrated+rep2.Jobs.Migrated != 0 {
 		t.Fatalf("second run inserted rows: %+v", rep2)
 	}
-	if rep2.Creators.Skipped != 1 || rep2.Collections.Skipped != 1 || rep2.Works.Skipped != 2 ||
-		rep2.Assets.Skipped != 4 || rep2.MissingFiles != 1 ||
-		rep2.Jobs.Skipped != 1 || rep2.SkippedNoVid != 1 || rep2.SkippedOther != 1 {
+	if rep2.Creators.Skipped != 1 || rep2.Collections.Skipped != 1 || rep2.Works.Skipped != 3 ||
+		rep2.Assets.Skipped != 6 || rep2.MissingFiles != 1 ||
+		rep2.Jobs.Skipped != 1 || rep2.SkippedNoVid != 2 || rep2.SkippedOther != 1 {
 		t.Fatalf("second run skips: %+v", rep2)
 	}
-	if rep2.Totals["works"] != 2 || rep2.Totals["assets"] != 3 || rep2.Totals["download_jobs"] != 1 {
+	if rep2.Totals["works"] != 3 || rep2.Totals["assets"] != 5 || rep2.Totals["download_jobs"] != 1 {
 		t.Fatalf("second run totals: %+v", rep2.Totals)
 	}
 }

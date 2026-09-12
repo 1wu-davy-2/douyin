@@ -29,6 +29,12 @@ type Provider interface {
 	WorkDetail(ctx context.Context, itemID string) (*WorkDetail, error)
 }
 
+// Work type constants (works.type / sidecar /posts type / /work type).
+const (
+	TypeVideo = "video"
+	TypeImage = "image"
+)
+
 // Profile mirrors the sidecar GET /profile response.
 type Profile struct {
 	SecUID     string `json:"sec_uid"`
@@ -40,7 +46,9 @@ type Profile struct {
 
 // PostItem is one entry of the sidecar GET /posts response. duration is in
 // milliseconds (sidecar semantics); published_at is RFC3339 UTC or "" when the
-// upstream create_time was missing (JSON null).
+// upstream create_time was missing (JSON null). Type is "image" when the
+// upstream aweme.images list was non-empty (image_count is the gallery size,
+// duration 0), "video" otherwise.
 type PostItem struct {
 	ItemID      string `json:"item_id"`
 	Title       string `json:"title"`
@@ -49,6 +57,8 @@ type PostItem struct {
 	PublishedAt string `json:"published_at"`
 	MixID       string `json:"mix_id"`
 	MixName     string `json:"mix_name"`
+	Type        string `json:"type"`
+	ImageCount  int    `json:"image_count"`
 }
 
 // PostsPage mirrors the sidecar GET /posts response. NextCursor is nil when
@@ -86,13 +96,62 @@ func (v Variant) Candidates() []string {
 	return out
 }
 
-// WorkDetail mirrors the sidecar GET /work response.
+// WorkImage is one gallery image of an image work (sidecar additive field):
+// the primary URL plus alternate CDN candidates for the same picture.
+type WorkImage struct {
+	URL    string   `json:"url"`
+	URLs   []string `json:"urls,omitempty"`
+	Width  int      `json:"width"`
+	Height int      `json:"height"`
+}
+
+// Candidates returns the download candidates: URL first, then URLs minus
+// duplicates (same convention as Variant.Candidates).
+func (w WorkImage) Candidates() []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, u := range append([]string{w.URL}, w.URLs...) {
+		if u != "" && !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// LiveVideo is one live-photo / animated segment attached to a gallery image
+// (sidecar additive field; a work may carry none).
+type LiveVideo struct {
+	URL  string   `json:"url"`
+	URLs []string `json:"urls,omitempty"`
+}
+
+// Candidates returns the download candidates: URL first, then URLs minus
+// duplicates.
+func (l LiveVideo) Candidates() []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, u := range append([]string{l.URL}, l.URLs...) {
+		if u != "" && !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// WorkDetail mirrors the sidecar GET /work response. Video works carry
+// Variants and no Images/LiveVideos; image works carry Images (gallery order)
+// plus optional LiveVideos and an empty Variants list.
 type WorkDetail struct {
-	ItemID   string    `json:"item_id"`
-	Title    string    `json:"title"`
-	CoverURL string    `json:"cover_url"`
-	Duration int       `json:"duration"`
-	Variants []Variant `json:"variants"`
+	ItemID     string      `json:"item_id"`
+	Title      string      `json:"title"`
+	Type       string      `json:"type,omitempty"`
+	CoverURL   string      `json:"cover_url"`
+	Duration   int         `json:"duration"`
+	Variants   []Variant   `json:"variants"`
+	Images     []WorkImage `json:"images,omitempty"`
+	LiveVideos []LiveVideo `json:"live_videos,omitempty"`
 }
 
 // ParseCursor converts the API-level string cursor to the integer max_cursor

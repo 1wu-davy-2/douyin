@@ -35,10 +35,21 @@ var (
 
 // CoverJPEG renders a deterministic gradient thumbnail.
 func CoverJPEG() []byte {
+	return gradientJPEG(0)
+}
+
+// GalleryJPEG renders the n-th mock gallery image: the cover gradient with a
+// deterministic per-index tint so the mock galleries show distinct pictures.
+func GalleryJPEG(n int) []byte {
+	return gradientJPEG(n)
+}
+
+func gradientJPEG(shade int) []byte {
+	blue := uint8(128 + shade*37) // wraps naturally; deterministic per index
 	img := image.NewRGBA(image.Rect(0, 0, 128, 128))
 	for y := 0; y < 128; y++ {
 		for x := 0; x < 128; x++ {
-			img.Set(x, y, color.RGBA{R: uint8(x * 2), G: uint8(y * 2), B: 128, A: 255})
+			img.Set(x, y, color.RGBA{R: uint8(x * 2), G: uint8(y * 2), B: blue, A: 255})
 		}
 	}
 	var buf bytes.Buffer

@@ -470,16 +470,23 @@ func persistPage(ctx context.Context, conn *sql.Conn, creatorID int64, page *pro
 
 		durationSec := it.Duration / 1000 // sidecar carries milliseconds
 
+		// Work type (stage 9): the sidecar classifies galleries
+		// ("aweme.images" non-empty -> image). Unknown/empty -> video.
+		workType := it.Type
+		if workType != provider.TypeImage && workType != provider.TypeVideo {
+			workType = provider.TypeVideo
+		}
+
 		id, existed := known[itemID]
 		if existed {
 			updN++
 			if _, uerr := tx.ExecContext(ctx, `
 				UPDATE works SET
 					collection_id = COALESCE(?, collection_id),
-					title = ?, cover_url = ?, duration = ?, published_at = ?,
+					title = ?, cover_url = ?, duration = ?, type = ?, published_at = ?,
 					deleted_at = NULL, updated_at = ?
 				WHERE id = ?`,
-				collectionID, it.Title, it.CoverURL, durationSec, published, now, id); uerr != nil {
+				collectionID, it.Title, it.CoverURL, durationSec, workType, published, now, id); uerr != nil {
 				return 0, 0, nil, 0, fmt.Errorf("update work %s: %w", itemID, uerr)
 			}
 		} else {
@@ -489,18 +496,19 @@ func persistPage(ctx context.Context, conn *sql.Conn, creatorID int64, page *pro
 			// excludes - the DO UPDATE branch is a safety net.
 			if _, ierr := tx.ExecContext(ctx, `
 				INSERT INTO works (creator_id, collection_id, item_id, title, cover_url,
-				                   duration, published_at, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				                   duration, type, published_at, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(creator_id, item_id) DO UPDATE SET
 					collection_id = COALESCE(excluded.collection_id, works.collection_id),
 					title = excluded.title,
 					cover_url = excluded.cover_url,
 					duration = excluded.duration,
+					type = excluded.type,
 					published_at = excluded.published_at,
 					deleted_at = NULL,
 					updated_at = excluded.updated_at`,
 				creatorID, collectionID, itemID, it.Title, it.CoverURL,
-				durationSec, published, now, now); ierr != nil {
+				durationSec, workType, published, now, now); ierr != nil {
 				return 0, 0, nil, 0, fmt.Errorf("insert work %s: %w", itemID, ierr)
 			}
 			if serr := tx.QueryRowContext(ctx,
