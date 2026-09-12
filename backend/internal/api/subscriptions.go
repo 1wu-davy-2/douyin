@@ -45,17 +45,41 @@ type subscriptionView struct {
 	LastRunAt       *string `json:"last_run_at"`
 	NextRunAt       *string `json:"next_run_at"`
 	Enabled         bool    `json:"enabled"`
+	NewWorks        int64   `json:"new_works"`
+	NewDownloaded   int64   `json:"new_downloaded"`
 	CreatedAt       string  `json:"created_at"`
 }
 
+// subscriptionListQuery computes the monitor stats in the same statement:
+// new_works counts works recorded since the subscription was created
+// (works.created_at >= s.created_at) within the target scope (the whole
+// creator for creator targets, the single collection otherwise);
+// new_downloaded counts those whose dl_status — derived from the latest job
+// with the shared dlStatusExpr — is succeeded.
 const subscriptionListQuery = `
 	SELECT s.id, s.target_type, s.creator_id, s.collection_id,
 	       COALESCE(cr.nickname, ''), s.interval_minutes, s.auto_download, s.quality,
 	       s.last_run_at, s.enabled, s.created_at,
-	       COALESCE(col.name, '')
+	       COALESCE(col.name, ''),
+	       (SELECT COUNT(*) FROM works w
+	        WHERE w.deleted_at IS NULL AND w.created_at >= s.created_at
+	          AND w.creator_id = s.creator_id
+	          AND (s.collection_id IS NULL OR w.collection_id = s.collection_id)) AS new_works,
+	       (SELECT COUNT(*) FROM works w
+	        LEFT JOIN download_jobs lj ON lj.id = (
+	            SELECT j.id FROM download_jobs j WHERE j.work_id = w.id ORDER BY j.id DESC LIMIT 1)
+	        WHERE w.deleted_at IS NULL AND w.created_at >= s.created_at
+	          AND w.creator_id = s.creator_id
+	          AND (s.collection_id IS NULL OR w.collection_id = s.collection_id)
+	          AND ` + dlStatusExpr + ` = 'succeeded') AS new_downloaded
 	FROM subscriptions s
 	LEFT JOIN creators cr ON cr.id = s.creator_id
 	LEFT JOIN collections col ON col.id = s.collection_id`
+
+// scanSubscriptionStats scans the two trailing monitor-stat columns.
+func scanSubscriptionStats(scan func(...any) error, v *subscriptionView) error {
+	return scan(&v.NewWorks, &v.NewDownloaded)
+}
 
 func scanSubscription(rows *sql.Rows) (subscriptionView, error) {
 	var v subscriptionView
@@ -63,7 +87,8 @@ func scanSubscription(rows *sql.Rows) (subscriptionView, error) {
 	var autoDownload, enabled int
 	if err := rows.Scan(&v.ID, &v.TargetType, &v.CreatorID, &collectionID,
 		&v.CreatorNickname, &v.IntervalMinutes, &autoDownload, &v.Quality,
-		&lastRun, &enabled, &v.CreatedAt, &v.TargetName); err != nil {
+		&lastRun, &enabled, &v.CreatedAt, &v.TargetName,
+		&v.NewWorks, &v.NewDownloaded); err != nil {
 		return v, err
 	}
 	if collectionID.Valid && collectionID.String != "" {
@@ -323,7 +348,8 @@ func (s *Server) loadSubscription(w http.ResponseWriter, r *http.Request, id int
 	var autoDownload, enabled int
 	err := row.Scan(&v.ID, &v.TargetType, &v.CreatorID, &collectionID,
 		&v.CreatorNickname, &v.IntervalMinutes, &autoDownload, &v.Quality,
-		&lastRun, &enabled, &v.CreatedAt, &v.TargetName)
+		&lastRun, &enabled, &v.CreatedAt, &v.TargetName,
+		&v.NewWorks, &v.NewDownloaded)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "subscription not found")
 		return v, false

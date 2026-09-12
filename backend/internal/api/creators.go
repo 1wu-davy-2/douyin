@@ -69,6 +69,7 @@ type creatorView struct {
 	ReportedWorkCount int64         `json:"reported_work_count"`
 	WorksCount        int64         `json:"works_count"`
 	DownloadedCount   int64         `json:"downloaded_count"`
+	DownloadBytes     int64         `json:"download_bytes"`
 	CreatedAt         string        `json:"created_at"`
 	LastScan          *lastScanView `json:"last_scan,omitempty"`
 }
@@ -91,13 +92,16 @@ const creatorListQuery = `
 	       (SELECT COUNT(*) FROM works w WHERE w.creator_id = c.id AND w.deleted_at IS NULL) AS works_count,
 	       (SELECT COUNT(DISTINCT dj.work_id) FROM download_jobs dj
 	        JOIN works w2 ON w2.id = dj.work_id
-	        WHERE w2.creator_id = c.id AND dj.status = 'succeeded' AND w2.deleted_at IS NULL) AS downloaded_count
+	        WHERE w2.creator_id = c.id AND dj.status = 'succeeded' AND w2.deleted_at IS NULL) AS downloaded_count,
+	       COALESCE((SELECT SUM(a.size_bytes) FROM assets a
+	        JOIN works w3 ON w3.id = a.work_id
+	        WHERE w3.creator_id = c.id AND a.kind IN ('video', 'image')), 0) AS download_bytes
 	FROM creators c`
 
 func scanCreatorView(rows *sql.Rows) (creatorView, error) {
 	var v creatorView
 	err := rows.Scan(&v.ID, &v.SecUID, &v.Nickname, &v.AvatarURL, &v.ProfileURL,
-		&v.ReportedWorkCount, &v.CreatedAt, &v.WorksCount, &v.DownloadedCount)
+		&v.ReportedWorkCount, &v.CreatedAt, &v.WorksCount, &v.DownloadedCount, &v.DownloadBytes)
 	return v, err
 }
 
@@ -230,7 +234,7 @@ func (s *Server) handleGetCreator(w http.ResponseWriter, r *http.Request) {
 
 func scanCreatorView2(row *sql.Row, v *creatorView) error {
 	return row.Scan(&v.ID, &v.SecUID, &v.Nickname, &v.AvatarURL, &v.ProfileURL,
-		&v.ReportedWorkCount, &v.CreatedAt, &v.WorksCount, &v.DownloadedCount)
+		&v.ReportedWorkCount, &v.CreatedAt, &v.WorksCount, &v.DownloadedCount, &v.DownloadBytes)
 }
 
 // handleDeleteCreator DELETE /api/creators/{id} — removes the creator and its
@@ -403,16 +407,26 @@ type workPage struct {
 	PageSize int        `json:"page_size"`
 }
 
-// workFilter carries the shared works-list filter (creator/collection + q).
+// workFilter carries the shared works-list filter (creator/collection + q +
+// type + dl). It is used by the works lists, their COUNT query and
+// batch-ids, so "select all matching" always agrees with the list.
 type workFilter struct {
 	creatorID    int64
 	collectionID *int64
 	q            string
+	workType     string // video | image | live; any other value is ignored
+	dl           string // none | queued | downloading | succeeded | failed; ignored otherwise
+}
+
+// validDlFilters are the contract-accepted dl= values (canceled is not
+// offered as a filter and is therefore ignored like any unknown value).
+var validDlFilters = map[string]bool{
+	"none": true, "queued": true, "downloading": true, "succeeded": true, "failed": true,
 }
 
 func (f workFilter) where() (string, []any) {
 	where := ` WHERE w.deleted_at IS NULL`
-	args := make([]any, 0, 4)
+	args := make([]any, 0, 6)
 	if f.creatorID > 0 {
 		where += ` AND w.creator_id = ?`
 		args = append(args, f.creatorID)
@@ -426,7 +440,34 @@ func (f workFilter) where() (string, []any) {
 		escaped := escapeLike(f.q)
 		args = append(args, "%"+escaped+"%", "%"+escaped+"%")
 	}
+	switch f.workType {
+	case "video":
+		where += ` AND w.type = 'video'`
+	case "image":
+		where += ` AND w.type = 'image'`
+	case "live":
+		// Live gallery: an image work carrying live video clips
+		// (assets.kind='video', quality LIKE 'live%').
+		where += ` AND w.type = 'image' AND EXISTS(SELECT 1 FROM assets la` +
+			` WHERE la.work_id = w.id AND la.kind = 'video' AND la.quality LIKE 'live%')`
+	}
+	if validDlFilters[f.dl] {
+		// Same CASE derivation as the dl_status badge in the list response
+		// (queued includes paused_q; no job row -> none).
+		where += ` AND ` + dlStatusExpr + ` = ?`
+		args = append(args, f.dl)
+	}
 	return where, args
+}
+
+// joins returns the extra FROM joins the filter needs. dl filtering derives
+// the status from the work's latest job (alias lj — the same join the works
+// list uses for display); the other filters touch only works/assets.
+func (f workFilter) joins() string {
+	if validDlFilters[f.dl] {
+		return latestJobJoin
+	}
+	return ""
 }
 
 func escapeLike(s string) string {
@@ -455,7 +496,12 @@ const worksListQuery = `
 	       ` + dlStatusExpr + `,
 	       CASE WHEN lj.status = 'succeeded' THEN lj.quality END
 	FROM works w
-	LEFT JOIN collections c ON c.id = w.collection_id
+	LEFT JOIN collections c ON c.id = w.collection_id`
+
+// latestJobJoin exposes the work's newest download job as lj (id DESC LIMIT
+// 1). dlStatusExpr derives dl_status from lj.status, so every query that
+// shows or filters on dl_status attaches this identical join.
+const latestJobJoin = `
 	LEFT JOIN download_jobs lj ON lj.id = (
 		SELECT j.id FROM download_jobs j WHERE j.work_id = w.id ORDER BY j.id DESC LIMIT 1)`
 
@@ -510,17 +556,22 @@ func (s *Server) serveWorkList(w http.ResponseWriter, r *http.Request, f workFil
 		writeError(w, http.StatusBadRequest, "invalid sort (published_at_desc|published_at_asc|duration_desc)")
 		return
 	}
+	// type/dl filters: unknown values are silently ignored per the contract.
+	f.workType = strings.TrimSpace(r.URL.Query().Get("type"))
+	f.dl = strings.TrimSpace(r.URL.Query().Get("dl"))
 
 	where, args := f.where()
 
 	var total int64
 	if err := s.deps.DB.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM works w`+where, args...).Scan(&total); err != nil {
+		`SELECT COUNT(*) FROM works w`+f.joins()+where, args...).Scan(&total); err != nil {
 		writeInternalError(w, err)
 		return
 	}
 
-	q := worksListQuery + where + order + ` LIMIT ? OFFSET ?`
+	// The list always joins the latest job (dl_status badge); the filter join
+	// is the identical LEFT JOIN, so no duplicate alias arises.
+	q := worksListQuery + latestJobJoin + where + order + ` LIMIT ? OFFSET ?`
 	args = append(args, pageSize, (page-1)*pageSize)
 	rows, err := s.deps.DB.QueryContext(r.Context(), q, args...)
 	if err != nil {
@@ -738,13 +789,16 @@ type jobSummary struct {
 	FinishedAt      *string `json:"finished_at"`
 }
 
-// handleBatchWorkIDs POST /api/works/batch-ids {creator_id, q?, collection_id?}
-// -> {ids:[...]} for "select all matching".
+// handleBatchWorkIDs POST /api/works/batch-ids {creator_id, q?, collection_id?,
+// type?, dl?} -> {ids:[...]} for "select all matching". The filters are the
+// exact same construction as the works lists (workFilter).
 func (s *Server) handleBatchWorkIDs(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		CreatorID    int64   `json:"creator_id"`
 		Q            *string `json:"q"`
 		CollectionID *int64  `json:"collection_id"`
+		Type         *string `json:"type"`
+		Dl           *string `json:"dl"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -761,8 +815,14 @@ func (s *Server) handleBatchWorkIDs(w http.ResponseWriter, r *http.Request) {
 	if body.Q != nil {
 		f.q = strings.TrimSpace(*body.Q)
 	}
+	if body.Type != nil {
+		f.workType = strings.TrimSpace(*body.Type)
+	}
+	if body.Dl != nil {
+		f.dl = strings.TrimSpace(*body.Dl)
+	}
 	where, args := f.where()
-	q := `SELECT w.id FROM works w` + where + ` ORDER BY w.published_at DESC, w.id DESC`
+	q := `SELECT w.id FROM works w` + f.joins() + where + ` ORDER BY w.published_at DESC, w.id DESC`
 	rows, err := s.deps.DB.QueryContext(r.Context(), q, args...)
 	if err != nil {
 		writeInternalError(w, err)
