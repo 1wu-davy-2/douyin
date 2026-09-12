@@ -11,8 +11,19 @@
 | ④ | Go 扫描器 + 订阅调度(测试全绿,mock 502 作品端到端通过) | ✅ 92695cf |
 | ⑤ | Go 下载器 + 任务 REST + SSE(14 行为测试全绿,Range 206 验证) | ✅ 540ead0 |
 | 6 | 主线联调:浏览器 E2E 全流程通过(初始化/扫描502对账/分页/下载/SSE进度/播放器Range/订阅调度/设置);修复 mock CDN 真实 MP4 + 播放器取最新资产 | ✅ ccf982b |
-| 7 | import-legacy 旧库迁移工具 | 🔄 进行中 |
-| 8 | 真实 cookie 实测 | 待用户 |
+| 7 | import-legacy 旧库迁移工具(1734 作品/2299 资产零拷贝接入,junction,幂等,206 播放验证) | ✅ 72a5d7e |
+| 8 | 真实 cookie 实测:@吖头与妈妈🌹 101/101 作品扫描完整性 0 缺口、全部下载成功;实测修复 safeName 中文截断 panic、CDN 403(浏览器头 + 多候选地址 + 任务节流)、侧车排他绑定 | ✅ 33ac171 |
+
+## 全部完成。日常使用
+
+```powershell
+powershell -File scripts\build.ps1     # 构建单二进制(已构建: backend\douyin-server.exe)
+.\backend\douyin-server.exe            # http://127.0.0.1:8787
+```
+
+- 首次使用:网页创建管理员 → 设置页粘贴抖音 Cookie(旧项目 .env 的 F2_COOKIE 已迁移)→ 运行模式选 sidecar → 作品库添加博主
+- 旧数据已通过 import-legacy 接入(7 博主/1734 作品/928 已下载,`data\downloads\legacy` 为指向旧下载根的 junction,零拷贝)
+- 迁移命令:`.\backend\douyin-server.exe -mode import-legacy -legacy-db "E:\home\douyin-archive\data\app.db"`
 
 ## 旧版四大问题的修复落点
 
