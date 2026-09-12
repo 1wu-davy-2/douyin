@@ -35,6 +35,7 @@ import type {
   WorkDlFilter,
   WorkSort,
   WorkTypeFilter,
+  BatchDeleteWorksResult,
 } from "./types";
 
 // ---------- 认证 ----------
@@ -74,6 +75,8 @@ export const moveCreatorDownloads = (id: number, targetRoot: string) =>
     method: "POST",
     json: { target_root: targetRoot },
   });
+export const batchDeleteWorks = (ids: number[]) =>
+  api<BatchDeleteWorksResult>("/api/works/batch-delete", { method: "POST", json: { ids } });
 export const rescanCreator = (id: number, full = false) =>
   api<RescanResult>(`/api/creators/${id}/rescan`, { method: "POST", json: { full } });
 export const listCollections = (creatorId: number) =>

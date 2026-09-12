@@ -98,6 +98,17 @@ export interface RescanResult {
 }
 
 /** 契约 v1.3:PATCH /api/creators/{id}/download-root 响应。 */
+export interface BatchDeleteSkipped {
+  work_id: number;
+  reason: string;
+}
+
+export interface BatchDeleteWorksResult {
+  deleted: number[];
+  freed_bytes: number;
+  skipped: BatchDeleteSkipped[];
+}
+
 export interface CreatorDownloadRootResult {
   ok: boolean;
   /** null = 已清除独立设置,跟随全局。 */

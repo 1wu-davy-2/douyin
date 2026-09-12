@@ -44,6 +44,7 @@ func (s *Server) registerCreatorRoutes(mux *http.ServeMux) {
 		{http.MethodGet, "/api/collections/{id}/works", s.handleCollectionWorks},
 		{http.MethodGet, "/api/works/{id}", s.handleGetWork},
 		{http.MethodPost, "/api/works/batch-ids", s.handleBatchWorkIDs},
+		{http.MethodPost, "/api/works/batch-delete", s.handleBatchDeleteWorks},
 		{http.MethodGet, "/api/works/{id}/qualities", s.handleWorkQualities},
 	})
 }

@@ -9,7 +9,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Library as LibraryIcon, Pencil, Plus, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "../api/client";
-import { createCreator, moveCreatorDownloads, rescanCreator, setCreatorDownloadRoot } from "../api/endpoints";
+import { createCreator, moveCreatorDownloads, rescanCreator, setCreatorDownloadRoot, batchDeleteWorks } from "../api/endpoints";
+import { ConfirmDialog } from "../components/confirm-dialog";
 import { qk, useCollections, useCreators, useSettings, useWorks } from "../api/queries";
 import type { Creator, MoveDownloadsResult, Quality, WorkDlFilter, WorkSort, WorkTypeFilter } from "../api/types";
 import { EmptyState } from "../components/empty-state";
@@ -70,6 +71,7 @@ export function LibraryPage() {
 
   // 选择集合与画质
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [quality, setQuality] = useState<Quality>("1080p");
 
   const creatorList = creators.data ?? [];
@@ -168,6 +170,24 @@ export function LibraryPage() {
       void queryClient.invalidateQueries({ queryKey: ["creators"] });
     },
     onError: (e) => toast.error("重新扫描失败", { description: e.message }),
+  });
+
+  // ---------- 删除已选 ----------
+  const deleteMut = useMutation({
+    mutationFn: (ids: number[]) => batchDeleteWorks(ids),
+    onSuccess: (res) => {
+      const freed = formatBytes(res.freed_bytes);
+      const fail = res.skipped.length;
+      toast.success(`已删除 ${res.deleted.length} 个作品(释放 ${freed})`,
+        fail > 0 ? { description: `${fail} 个作品删除失败,记录已保留` } : undefined);
+      setSelected(new Set());
+      void queryClient.invalidateQueries({ queryKey: ["works"] });
+      void queryClient.invalidateQueries({ queryKey: ["creators"] });
+      void queryClient.invalidateQueries({ queryKey: ["collections"] });
+      void queryClient.invalidateQueries({ queryKey: qk.downloadsAll });
+      void queryClient.invalidateQueries({ queryKey: qk.downloadsSummary });
+    },
+    onError: (e) => toast.error("删除失败", { description: e.message }),
   });
 
   // ---------- 渲染 ----------
@@ -292,6 +312,8 @@ export function LibraryPage() {
                 onQualityChange={setQuality}
                 onDownload={() => downloadMut.mutate([...selected])}
                 downloadPending={downloadMut.isPending}
+                onDelete={() => setConfirmDeleteOpen(true)}
+                deletePending={deleteMut.isPending}
                 onPlay={(index) => {
                   const playable = pageItems
                     .filter((w) => w.dl_status === "succeeded")
@@ -320,6 +342,17 @@ export function LibraryPage() {
           />
         )}
       </section>
+
+      <ConfirmDialog
+        open={confirmDeleteOpen}
+        onOpenChange={setConfirmDeleteOpen}
+        title={`删除已选的 ${selected.size} 个作品?`}
+        description="将同时删除这些作品已下载的视频/图片文件与下载记录,不可恢复。"
+        confirmLabel="删除"
+        destructive
+        loading={deleteMut.isPending}
+        onConfirm={() => deleteMut.mutate([...selected])}
+      />
     </div>
   );
 }
