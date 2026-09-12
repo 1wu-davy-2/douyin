@@ -53,10 +53,17 @@ work item 字段(白名单,列表用):
   "id": 123, "item_id": "v1a2b3...", "title": "标题", "cover_url": "https://...",
   "duration": 45, "published_at": "2026-01-01T00:00:00Z",
   "collection_id": 7, "collection_name": "合集名",
+  "type": "video", "image_count": 0,
   "dl_status": "succeeded", "downloaded_quality": "1080p",
   "created_at": "..."
 }
 ```
+
+`type ∈ video|image`;image(图集/动图)作品 `duration=0`、`image_count` 为图集张数。
+资产存储约定:图集作品按**作品名聚合**为目录 `downloads/{creator}/collections|singles/{safeName(标题)}/`,
+每张图为资产 `kind="image"`、`quality` 为 4 位序号("0001"、"0002"... 按原始顺序);
+动图视频片段 `kind="video"`、`quality="live0001"...`;封面与 metadata 同目录。
+`GET /api/works/{id}/assets` 排序:video(最新在前)→ image(quality 序号升序)→ cover → metadata。
 
 ## 合集 Collections
 
@@ -154,8 +161,8 @@ data: {"sidecar":"running","risk_paused":false,"paused_until":null}
 |---|---|---|
 | GET | `/health` | → `{status:"ok", mock:bool, cookie_loaded:bool}` |
 | GET | `/profile?sec_uid=` | → `{sec_uid, nickname, avatar_url, aweme_count, signature}` |
-| GET | `/posts?sec_uid=&cursor=&count=20` | → `{items:[{item_id,title,cover_url,duration,published_at,mix_id,mix_name}], has_more, next_cursor}`;**任何失败返回非 200 + `{"error":"..."}`,绝不吞错返回空 items** |
-| GET | `/work?item_id=` | → `{item_id, title, variants:[{quality,width,height,bitrate,size_bytes,url,urls?:[...]}], cover_url, duration}`;`urls` 为同一资产的多个 CDN 候选地址(主节点可能对部分请求 403,下载方按序尝试),`url` 恒等于首个候选 |
+| GET | `/posts?sec_uid=&cursor=&count=20` | → `{items:[{item_id,title,cover_url,duration,published_at,mix_id,mix_name,type,image_count}], has_more, next_cursor}`;**任何失败返回非 200 + `{"error":"..."}`,绝不吞错返回空 items**;`type ∈ video\|image`(`aweme.images` 非空即 image),image 时 `image_count` 为图集张数、duration 为 0 |
+| GET | `/work?item_id=` | → `{item_id, title, type, variants:[{quality,width,height,bitrate,size_bytes,url,urls?:[...]}], images?:[{url,urls,width,height}], live_videos?:[{url,urls}], cover_url, duration}`;`type ∈ video\|image`(aweme.images 非空即 image)。video 作品:variants 非空(每档 `urls` 为同资产多个 CDN 候选,下载方按序尝试,`url` 恒等于首个候选),无 images;image 作品:反之(variants 为空数组),`images` 为图集逐张地址(按原始顺序),`live_videos` 为图集中动图/实况的视频片段(可为空) |
 
 约定:
 1. `published_at` 侧车负责从 create_time 转成 RFC3339 UTC
