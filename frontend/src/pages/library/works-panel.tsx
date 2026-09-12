@@ -6,6 +6,7 @@ import type { Page, Quality, Work, WorkSort, Collection } from "../../api/types"
 import { QUALITIES } from "../../api/types";
 import { DlStatusBadge } from "../../components/status-badge";
 import { EmptyState } from "../../components/empty-state";
+import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
@@ -14,7 +15,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { formatDuration, formatDate } from "../../lib/format";
 import { Link } from "react-router";
-import { Download, FileVideo, ListFilter, Play, Search, X } from "lucide-react";
+import { Download, FileVideo, Film, Image as ImageIcon, ListFilter, Play, Search, X } from "lucide-react";
 import { Pager } from "./pager";
 
 interface WorksPanelProps {
@@ -194,12 +195,25 @@ export function WorksPanel(props: WorksPanelProps) {
                     )}
                   </TableCell>
                   <TableCell className="max-w-0">
-                    <p className="max-w-[380px] truncate" title={w.title}>{w.title}</p>
+                    <div className="flex items-center gap-1.5">
+                      <p className="max-w-[380px] truncate" title={w.title}>{w.title}</p>
+                      {w.type === "image" ? (
+                        <Badge variant="secondary" className="shrink-0">
+                          <ImageIcon /> 图集 {w.image_count} 张
+                        </Badge>
+                      ) : (
+                        <Badge variant="muted" className="shrink-0">
+                          <Film /> 视频
+                        </Badge>
+                      )}
+                    </div>
                     {w.collection_name ? (
                       <p className="text-xs text-muted-foreground">{w.collection_name}</p>
                     ) : null}
                   </TableCell>
-                  <TableCell className="tabular-nums text-muted-foreground">{formatDuration(w.duration)}</TableCell>
+                  <TableCell className="tabular-nums text-muted-foreground">
+                    {w.type === "image" ? "—" : formatDuration(w.duration)}
+                  </TableCell>
                   <TableCell className="tabular-nums text-muted-foreground">{formatDate(w.published_at)}</TableCell>
                   <TableCell><DlStatusBadge status={w.dl_status} quality={w.downloaded_quality} /></TableCell>
                 </TableRow>

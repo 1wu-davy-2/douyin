@@ -9,7 +9,8 @@ export type TargetType = "creator" | "collection";
 export type ScanStatus = "running" | "succeeded" | "partial" | "failed";
 export type Quality = "540p" | "720p" | "1080p";
 export type WorkSort = "published_at_desc" | "published_at_asc" | "duration_desc";
-export type AssetKind = "video" | "cover" | "metadata";
+export type WorkType = "video" | "image";
+export type AssetKind = "video" | "image" | "cover" | "metadata";
 
 export const JOB_STATUSES: readonly JobStatus[] = [
   "queued",
@@ -106,6 +107,9 @@ export interface Work {
   published_at: string;
   collection_id: number | null;
   collection_name: string | null;
+  /** 契约 v1.1:video=视频,image=图集/动图(此时 duration=0、image_count 为张数)。 */
+  type: WorkType;
+  image_count: number;
   dl_status: DLStatus;
   downloaded_quality: string | null;
   created_at: string;
@@ -131,6 +135,7 @@ export interface Asset {
   kind: AssetKind;
   path: string;
   size_bytes: number;
+  /** video=画质档;image=4 位序号("0001"…按原始顺序);live 片段="live0001"…;cover/metadata=null。 */
   quality?: string | null;
 }
 

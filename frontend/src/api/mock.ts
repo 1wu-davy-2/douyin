@@ -27,6 +27,7 @@ import type {
   TargetType,
   Work,
   WorkDetail,
+  WorkType,
 } from "./types";
 import { JOB_STATUSES } from "./types";
 
@@ -94,6 +95,14 @@ interface MockWork {
   published_at: string;
   collection_id: number | null;
   created_at: string;
+  /** 契约 v1.1:image=图集(duration 恒为 0)。 */
+  type: WorkType;
+  /** image 作品的图集张数。 */
+  image_count: number;
+  /** image 作品附带的动图/实况视频片段数(0 或 1)。 */
+  live_count: number;
+  /** 内部字段:每张图的 data URI(序列化时剔除,仅注入 image 资产 path)。 */
+  image_urls: string[];
 }
 
 interface MockJob {
@@ -213,6 +222,38 @@ function avatarSvg(letter: string, hue: number): string {
   return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
 }
 
+/** 图集第 n 张:竖版 SVG data URI,带大号序号文字方便肉眼核对轮播顺序。 */
+function imageSvg(seed: number, n: number, total: number): string {
+  const h1 = (seed * 37 + n * 53) % 360;
+  const svg =
+    `<svg xmlns='http://www.w3.org/2000/svg' width='400' height='700'>` +
+    `<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>` +
+    `<stop offset='0%' stop-color='hsl(${h1},45%,30%)'/>` +
+    `<stop offset='100%' stop-color='hsl(${(h1 + 60) % 360},50%,16%)'/>` +
+    `</linearGradient></defs>` +
+    `<rect width='400' height='700' fill='url(#g)'/>` +
+    `<circle cx='${80 + ((seed + n * 31) % 240)}' cy='${140 + ((seed * 7 + n * 17) % 420)}' r='110' fill='rgba(255,255,255,0.06)'/>` +
+    `<text x='50%' y='44%' font-size='170' font-weight='bold' fill='rgba(255,255,255,0.88)' font-family='sans-serif' ` +
+    `text-anchor='middle' dominant-baseline='middle'>${n}</text>` +
+    `<text x='50%' y='60%' font-size='34' fill='rgba(255,255,255,0.6)' font-family='sans-serif' ` +
+    `text-anchor='middle' dominant-baseline='middle'>第 ${n} 张 / 共 ${total} 张</text>` +
+    `</svg>`;
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+/**
+ * 图集覆盖规则(按作品序号确定性判定):
+ * - index % 7 == 6 → image 作品,3-6 张图(3 + index % 4)
+ * - index % 14 == 13 → 另带 1 段动图/实况视频片段(live)
+ */
+function imageRuleFor(index: number): { isImage: boolean; imageCount: number; liveCount: number } {
+  const isImage = index % 7 === 6;
+  if (!isImage) return { isImage: false, imageCount: 0, liveCount: 0 };
+  const imageCount = 3 + (index % 4);
+  const liveCount = index % 14 === 13 ? 1 : 0;
+  return { isImage, imageCount, liveCount };
+}
+
 function extractSecUid(url: string): string {
   const q = url.match(/sec_uid=([^&]+)/);
   if (q) return decodeURIComponent(q[1]);
@@ -280,16 +321,24 @@ function makeWorks(creator: MockCreator, count: number, baseTime: number, cols: 
   for (let i = 0; i < count; i++) {
     t -= ri(3, 26) * 3600_000;
     const col = cols.length > 0 && rand() < 0.45 ? pick(cols) : null;
+    const rule = imageRuleFor(i);
+    const imageUrls = rule.isImage
+      ? Array.from({ length: rule.imageCount }, (_, n) => imageSvg(creator.id * 1000 + i, n + 1, rule.imageCount))
+      : [];
     works.push({
       id: ++state.ids.work,
       creator_id: creator.id,
       item_id: `v${(hashString(`${creator.sec_uid}:${i}`) >>> 0).toString(36)}${(rand() * 1e6).toFixed(0)}`,
       title: `${pick(TITLE_A)}${pick(TITLE_B)} #${i + 1}`,
-      cover_url: coverSvg(creator.id * 1000 + i),
-      duration: Math.round(8 + rand() * rand() * 700),
+      cover_url: rule.isImage ? imageUrls[0] : coverSvg(creator.id * 1000 + i),
+      duration: rule.isImage ? 0 : Math.round(8 + rand() * rand() * 700),
       published_at: iso(t),
       collection_id: col ? col.id : null,
       created_at: iso(baseTime),
+      type: rule.isImage ? "image" : "video",
+      image_count: rule.imageCount,
+      live_count: rule.liveCount,
+      image_urls: imageUrls,
     });
   }
   return works;
@@ -466,16 +515,43 @@ function seed(): void {
 }
 
 function createAssets(work: MockWork, quality: string, sizeBytes: number): void {
-  const hasVideo = state.assets.some((a) => a.work_id === work.id && a.kind === "video");
-  if (!hasVideo) {
-    state.assets.push({
-      id: ++state.ids.asset,
-      work_id: work.id,
-      kind: "video",
-      path: `downloads/${work.creator_id}/${work.item_id}_${quality}.mp4`,
-      size_bytes: sizeBytes,
-      quality,
-    });
+  // 图集作品:每张图一个 kind=image 资产(quality 为 4 位序号,path 直接放 data URI,
+  // mock 不提供二进制 content 端点,播放器在 mock 模式取 path 当图片地址);live 片段 kind=video/live0001。
+  if (work.type === "image") {
+    for (let n = 1; n <= work.image_count; n++) {
+      const q = String(n).padStart(4, "0");
+      if (state.assets.some((a) => a.work_id === work.id && a.kind === "image" && a.quality === q)) continue;
+      state.assets.push({
+        id: ++state.ids.asset,
+        work_id: work.id,
+        kind: "image",
+        path: work.image_urls[n - 1] ?? imageSvg(work.id, n, work.image_count),
+        size_bytes: ri(120, 900) * 1024,
+        quality: q,
+      });
+    }
+    if (work.live_count > 0 && !state.assets.some((a) => a.work_id === work.id && a.kind === "video")) {
+      state.assets.push({
+        id: ++state.ids.asset,
+        work_id: work.id,
+        kind: "video",
+        path: `downloads/${work.creator_id}/singles/${work.item_id}/live0001.mp4`,
+        size_bytes: ri(2, 8) * MB,
+        quality: "live0001",
+      });
+    }
+  } else {
+    const hasVideo = state.assets.some((a) => a.work_id === work.id && a.kind === "video");
+    if (!hasVideo) {
+      state.assets.push({
+        id: ++state.ids.asset,
+        work_id: work.id,
+        kind: "video",
+        path: `downloads/${work.creator_id}/${work.item_id}_${quality}.mp4`,
+        size_bytes: sizeBytes,
+        quality,
+      });
+    }
   }
   const hasCover = state.assets.some((a) => a.work_id === work.id && a.kind === "cover");
   if (!hasCover) {
@@ -485,6 +561,17 @@ function createAssets(work: MockWork, quality: string, sizeBytes: number): void 
       kind: "cover",
       path: `downloads/${work.creator_id}/${work.item_id}.webp`,
       size_bytes: ri(30, 200) * 1024,
+      quality: null,
+    });
+  }
+  // 图集作品再补一份 metadata(契约排序 video→image→cover→metadata)
+  if (work.type === "image" && !state.assets.some((a) => a.work_id === work.id && a.kind === "metadata")) {
+    state.assets.push({
+      id: ++state.ids.asset,
+      work_id: work.id,
+      kind: "metadata",
+      path: `downloads/${work.creator_id}/singles/${work.item_id}/metadata.json`,
+      size_bytes: ri(1, 20) * 1024,
       quality: null,
     });
   }
@@ -609,6 +696,7 @@ function worksCountOf(creatorId: number): number {
 
 function addWorks(creator: MockCreator, count: number): number {
   if (count <= 0) return 0;
+  const baseIndex = worksCountOf(creator.id); // 图集规则按该博主作品序号判定
   const latest = state.works
     .filter((w) => w.creator_id === creator.id)
     .reduce<MockWork | null>((acc, w) => (!acc || w.published_at > acc.published_at ? w : acc), null);
@@ -620,16 +708,24 @@ function addWorks(creator: MockCreator, count: number): number {
     if (t > now) t = now - ri(1, 40) * 60_000;
     const creatorCols = state.collections.filter((c) => c.creator_id === creator.id);
     const col = creatorCols.length > 0 && rand() < 0.4 ? pick(creatorCols) : null;
+    const rule = imageRuleFor(baseIndex + i);
+    const imageUrls = rule.isImage
+      ? Array.from({ length: rule.imageCount }, (_, n) => imageSvg(creator.id * 1000 + baseIndex + i, n + 1, rule.imageCount))
+      : [];
     state.works.push({
       id: ++state.ids.work,
       creator_id: creator.id,
       item_id: `v${(hashString(`${creator.sec_uid}:new:${now}:${i}`) >>> 0).toString(36)}${i}`,
       title: `${pick(TITLE_A)}${pick(TITLE_B)} · 新${added + 1}`,
-      cover_url: coverSvg((now % 9000) + i * 13),
-      duration: Math.round(8 + rand() * rand() * 700),
+      cover_url: rule.isImage ? imageUrls[0] : coverSvg((now % 9000) + i * 13),
+      duration: rule.isImage ? 0 : Math.round(8 + rand() * rand() * 700),
       published_at: iso(t),
       collection_id: col ? col.id : null,
       created_at: iso(now),
+      type: rule.isImage ? "image" : "video",
+      image_count: rule.imageCount,
+      live_count: rule.liveCount,
+      image_urls: imageUrls,
     });
     added += 1;
   }
@@ -750,6 +846,8 @@ function workJson(w: MockWork, latest: Map<number, MockJob>): Work {
     published_at: w.published_at,
     collection_id: w.collection_id,
     collection_name: col ? col.name : null,
+    type: w.type,
+    image_count: w.image_count,
     dl_status: dlStatusOf(j),
     downloaded_quality: j && j.status === "succeeded" ? j.quality : null,
     created_at: w.created_at,
@@ -1094,9 +1192,17 @@ export function mockRoute(req: MockRequest): MockResponse {
     }
     if (seg[2] === "assets" && method === "GET") {
       const workId = Number(seg[1]);
+      // 契约 v1.1 排序:video(最新在前)→ image(quality 4 位序号升序)→ cover → metadata
+      const kindRank: Record<AssetKind, number> = { video: 0, image: 1, cover: 2, metadata: 3 };
       const list = state.assets
         .filter((a) => a.work_id === workId)
-        .sort((a, b2) => (a.kind === "video" ? -1 : 0) - (b2.kind === "video" ? -1 : 0))
+        .sort((a, b2) => {
+          const r = kindRank[a.kind] - kindRank[b2.kind];
+          if (r !== 0) return r;
+          if (a.kind === "video") return b2.id - a.id;
+          if (a.kind === "image") return (a.quality ?? "").localeCompare(b2.quality ?? "");
+          return a.id - b2.id;
+        })
         .map(assetJson);
       return ok(list);
     }
