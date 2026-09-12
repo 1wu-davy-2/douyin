@@ -253,7 +253,8 @@ func (d *Downloader) processImageWork(ctx context.Context, job *jobRow, detail *
 	}
 
 	// Aggregated gallery directory (one level deeper than video works).
-	dir := filepath.Join(job.collectionBase(d.dataDir), safeName(job.Title, maxTitleLength))
+	// 无标题作品用 item_id 兜底,避免全部挤进 "untitled" 互相叠加序号。
+	dir := filepath.Join(job.collectionBase(d.dataDir), safeName(untitledFallback(job.Title, job.ItemID), maxTitleLength))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		d.failJob(ctx, job, "create directory: "+err.Error())
 		return
@@ -867,6 +868,15 @@ const (
 	maxNameLength  = 60
 	maxTitleLength = 80
 )
+
+// untitledFallback returns itemID when the work has no usable title, so
+// untitled gallery folders stay unique instead of piling into "untitled-(2)".
+func untitledFallback(title, itemID string) string {
+	if strings.TrimSpace(title) == "" {
+		return itemID
+	}
+	return title
+}
 
 // safeName renders a Windows-safe file/dir name: reserved characters and
 // control characters become "_", trailing dots/spaces are trimmed, reserved
