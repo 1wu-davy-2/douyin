@@ -134,6 +134,7 @@ func run(ctx context.Context, cfg config.Settings) error {
 		Source:  resolver,
 		DataDir: cfg.DataDir,
 		BaseURL: fmt.Sprintf("http://127.0.0.1:%d", cfg.Port),
+		Mock:    cfg.Mock,
 	})
 	if _, err := dl.RecoverStale(); err != nil {
 		log.Printf("recover stale download jobs: %v", err)

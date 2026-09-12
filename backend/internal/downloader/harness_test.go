@@ -234,6 +234,7 @@ func newHarness(t *testing.T) *harness {
 		Store:   h.store,
 		Source:  fakeSource{h.prov},
 		DataDir: h.dataDir,
+		Mock:    true,
 	})
 	t.Cleanup(func() {
 		h.dl.Stop(3 * time.Second)

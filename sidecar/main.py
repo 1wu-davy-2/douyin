@@ -24,6 +24,7 @@ import asyncio
 import json
 import os
 import secrets
+import socket
 import sys
 import threading
 import time
@@ -197,6 +198,20 @@ def _first_url(url_list: Any) -> str:
     return ""
 
 
+def _url_candidates(url_list: Any) -> list[str]:
+    """全部去重后的候选地址:douyin 每个 play_addr 常带多个 CDN 节点,
+    主节点可能对部分请求 403,调用方(Go 下载器)应按序尝试。"""
+    if not isinstance(url_list, list):
+        return []
+    out: list[str] = []
+    for url in url_list:
+        if url:
+            s = str(url)
+            if s not in out:
+                out.append(s)
+    return out
+
+
 def _quiet_f2_logs() -> None:
     """F2 库会往 stdout 打多行 ERROR 堆栈,压掉以维持侧车一行一条日志的约定。"""
     import logging
@@ -306,8 +321,8 @@ def work_variants(video: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(entry, dict):
             continue
         play_addr = entry.get("play_addr") or {}
-        url = _first_url(play_addr.get("url_list"))
-        if not url:
+        candidates = _url_candidates(play_addr.get("url_list"))
+        if not candidates:
             continue
         width = int(play_addr.get("width") or video.get("width") or 0)
         height = int(play_addr.get("height") or video.get("height") or 0)
@@ -320,7 +335,8 @@ def work_variants(video: dict[str, Any]) -> list[dict[str, Any]]:
             "height": height,
             "bitrate": int(entry.get("bit_rate") or 0),
             "size_bytes": int(play_addr.get("data_size") or 0),
-            "url": url,
+            "url": candidates[0],
+            "urls": candidates,
         }
         current = best.get(quality)
         if current is None or variant["bitrate"] > current["bitrate"]:
@@ -500,6 +516,23 @@ _ROUTES: dict[str, Callable[[Handler, dict[str, str]], dict[str, Any]]] = {
 # ---------------------------------------------------------------------------
 
 
+class ExclusiveThreadingHTTPServer(ThreadingHTTPServer):
+    """拒绝与本机其他侧车进程双绑定同一端口。
+
+    ThreadingHTTPServer 默认 allow_reuse_address=1,在 Windows 上映射为
+    SO_REUSEADDR,会让两个进程同时 LISTEN 同一端口(连接被随机分配),
+    造成 Go 侧 token 校验 403 这类难以排查的错乱。这里显式关掉并在
+    Windows 上加 SO_EXCLUSIVEADDRUSE,让端口冲突变成启动期可见的失败。
+    """
+
+    allow_reuse_address = False
+
+    def server_bind(self) -> None:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="抖音归档工具 v2 签名侧车")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
@@ -510,7 +543,7 @@ def main() -> None:
     Handler.token = args.token
     Handler.mock = args.mock
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    server = ExclusiveThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.daemon_threads = True
     mode = "mock" if args.mock else "f2"
     print(

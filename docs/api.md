@@ -155,7 +155,7 @@ data: {"sidecar":"running","risk_paused":false,"paused_until":null}
 | GET | `/health` | → `{status:"ok", mock:bool, cookie_loaded:bool}` |
 | GET | `/profile?sec_uid=` | → `{sec_uid, nickname, avatar_url, aweme_count, signature}` |
 | GET | `/posts?sec_uid=&cursor=&count=20` | → `{items:[{item_id,title,cover_url,duration,published_at,mix_id,mix_name}], has_more, next_cursor}`;**任何失败返回非 200 + `{"error":"..."}`,绝不吞错返回空 items** |
-| GET | `/work?item_id=` | → `{item_id, title, variants:[{quality,width,height,bitrate,size_bytes,url}], cover_url, duration, raw_file?写 metadata.json 时由 Go 再拉一次详情获得}` |
+| GET | `/work?item_id=` | → `{item_id, title, variants:[{quality,width,height,bitrate,size_bytes,url,urls?:[...]}], cover_url, duration}`;`urls` 为同一资产的多个 CDN 候选地址(主节点可能对部分请求 403,下载方按序尝试),`url` 恒等于首个候选 |
 
 约定:
 1. `published_at` 侧车负责从 create_time 转成 RFC3339 UTC

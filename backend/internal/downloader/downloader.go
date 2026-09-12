@@ -32,6 +32,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"math/rand"
 	"time"
 
 	"douyin/backend/internal/events"
@@ -95,6 +96,8 @@ type Deps struct {
 	Client *http.Client
 	// Workers overrides the fixed claimant count (tests). 0 -> workerCount.
 	Workers int
+	// Mock disables inter-job pacing (mock CDN needs no rate limiting).
+	Mock bool
 }
 
 // Downloader owns the job queue and its workers.
@@ -107,6 +110,7 @@ type Downloader struct {
 	baseURL string
 	client  *http.Client
 	workers int
+	mock    bool
 
 	baseCtx   context.Context
 	cancelAll context.CancelFunc
@@ -147,6 +151,7 @@ func New(parent context.Context, deps Deps) *Downloader {
 		baseURL:  deps.BaseURL,
 		client:   client,
 		workers:  workers,
+		mock:     deps.Mock,
 		baseCtx:  ctx,
 		cancelAll: cancel,
 		gate:     newGate(defaultConcurrency),
@@ -287,6 +292,11 @@ func (d *Downloader) Stop(timeout time.Duration) {
 func (d *Downloader) worker() {
 	defer d.wg.Done()
 	for id := range d.q.ch {
+		// Gentle pacing: douyin throttles bursts of detail+CDN requests with
+		// transient 403s; a small stagger between job starts avoids the wave.
+		if !d.mock {
+			time.Sleep(time.Duration(800+rand.Intn(1200)) * time.Millisecond)
+		}
 		d.runJob(id)
 	}
 }

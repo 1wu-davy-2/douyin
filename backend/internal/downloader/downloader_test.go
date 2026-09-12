@@ -393,6 +393,7 @@ func TestRecoverStaleAndShutdownRecovery(t *testing.T) {
 		Store:   h.store,
 		Source:  fakeSource{h.prov},
 		DataDir: h.dataDir,
+		Mock:    true,
 	})
 	t.Cleanup(func() { dl2.Stop(3 * time.Second) })
 	n, err := dl2.RecoverStale()

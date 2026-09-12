@@ -150,15 +150,30 @@ func (d *Downloader) process(ctx context.Context, job *jobRow) {
 	name := safeName(job.Title, maxTitleLength) + ".mp4"
 
 	// 4. Stream the video (unique .part, then rename), progress in memory only.
+	// Try every CDN candidate in order: douyin nodes reject a subset of
+	// requests with 403, alternates usually succeed (old-tool behavior).
 	tr := d.addTracker(job.ID, variant.SizeBytes)
-	written, target, err := d.downloadVideo(ctx, job.ID, variant.URL, dir, name, tr)
-	if err != nil {
+	var written int64
+	var target string
+	var lastErr error
+	for _, candidate := range variant.Candidates() {
+		written, target, lastErr = d.downloadVideo(ctx, job.ID, candidate, dir, name, tr)
+		if lastErr == nil {
+			break
+		}
+		if ctx.Err() != nil { // user cancel or shutdown
+			break
+		}
+		log.Printf("[downloader] job %d: candidate failed (%v), trying next", job.ID, lastErr)
+		tr.downloaded.Store(0) // restart progress for the next candidate
+	}
+	if lastErr != nil {
 		d.removeTracker(job.ID)
 		if ctx.Err() != nil { // user cancel or shutdown
 			d.aborted(ctx, job)
 			return
 		}
-		d.failJob(ctx, job, "download: "+err.Error())
+		d.failJob(ctx, job, "download: "+lastErr.Error())
 		return
 	}
 
@@ -239,6 +254,28 @@ func (d *Downloader) failJob(ctx context.Context, job *jobRow, msg string) {
 // critical section because the winner's file already exists).
 var nameMu sync.Mutex
 
+// browserUA mimics a desktop Chrome request; the douyin CDN rejects bare
+// clients (403) regardless of signature validity.
+const browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+// mediaHeaders builds the headers the douyin CDN expects on media requests:
+// Referer + UA are mandatory, the session cookie unlocks authenticated nodes.
+// The cookie is re-read from the cookie file on every call so a settings
+// update takes effect without restart (same contract as the sidecar).
+func (d *Downloader) mediaHeaders() http.Header {
+	h := http.Header{}
+	h.Set("Referer", "https://www.douyin.com/")
+	h.Set("User-Agent", browserUA)
+	if d.store != nil {
+		if data, err := os.ReadFile(d.store.CookieFilePath()); err == nil {
+			if c := strings.TrimSpace(string(data)); c != "" {
+				h.Set("Cookie", c)
+			}
+		}
+	}
+	return h
+}
+
 // downloadVideo streams url into dir/name (via a unique .<jobID>.part file)
 // and renames it into place, returning the final path. On error the .part
 // file is removed (cancel/abort leaves nothing behind).
@@ -247,6 +284,9 @@ func (d *Downloader) downloadVideo(ctx context.Context, jobID int64, rawURL, dir
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return 0, "", err
+	}
+	for k, vs := range d.mediaHeaders() {
+		req.Header[k] = vs
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
@@ -332,6 +372,9 @@ func (d *Downloader) fetchCover(ctx context.Context, dir, stem, coverURL string)
 	if err != nil {
 		log.Printf("[downloader] cover: build request: %v", err)
 		return "", 0
+	}
+	for k, vs := range d.mediaHeaders() {
+		req.Header[k] = vs
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
@@ -522,8 +565,10 @@ func safeName(s string, max int) string {
 		}
 	}
 	s = b.String()
-	if len(s) > max {
-		s = string([]rune(s)[:max])
+	// 按字符数截断(不是字节):中文/emoji 标题的字节数远大于字符数,
+	// 用 len(s) 判断会对多字节标题触发 slice bounds panic(真实数据已踩过)
+	if runes := []rune(s); len(runes) > max {
+		s = string(runes[:max])
 	}
 	s = strings.TrimRight(s, " .")
 	switch strings.ToUpper(s) {

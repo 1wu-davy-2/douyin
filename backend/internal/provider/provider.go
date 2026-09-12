@@ -67,6 +67,23 @@ type Variant struct {
 	Bitrate   int    `json:"bitrate"`
 	SizeBytes int64  `json:"size_bytes"`
 	URL       string `json:"url"`
+	// URLs lists alternate CDN candidates for the same asset (sidecar
+	// additive field); the downloader tries them in order on 403/5xx.
+	URLs []string `json:"urls,omitempty"`
+}
+
+// Candidates returns the download candidates: URL first, then URLs minus
+// duplicates.
+func (v Variant) Candidates() []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, u := range append([]string{v.URL}, v.URLs...) {
+		if u != "" && !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 // WorkDetail mirrors the sidecar GET /work response.
