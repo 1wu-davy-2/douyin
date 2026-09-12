@@ -9,8 +9,8 @@
 | ② | Python F2 侧车(profile/posts/work + mock,严格错误语义) | ✅ 9d1ced3 |
 | ③ | React 前端全部页面(构建零错误,mock 端到端通过) | ✅ 9e5cbaa |
 | ④ | Go 扫描器 + 订阅调度(测试全绿,mock 502 作品端到端通过) | ✅ 92695cf |
-| ⑤ | Go 下载器 + 任务 REST + SSE | 🔄 进行中 |
-| 6 | 主线联调(mock 端到端)+ 单二进制构建 | 待 ④⑤ |
+| ⑤ | Go 下载器 + 任务 REST + SSE(14 行为测试全绿,Range 206 验证) | ✅ 540ead0 |
+| 6 | 主线联调(mock 端到端)+ 单二进制构建 | 🔄 进行中 |
 | 7 | import-legacy 旧库迁移工具 | 待 6 |
 | 8 | 真实 cookie 实测 | 待用户 |
 
