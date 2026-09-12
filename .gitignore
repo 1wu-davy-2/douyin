@@ -1,11 +1,33 @@
+# 运行时数据(数据库 / 下载内容 / Cookie / 日志)
 data/
+logs/
+*.log
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
+.cookie
+*.part
+
+# 构建产物(占位 index.html 保留,保证 go:embed 可编译)
+*.exe
+*.exe~
 node_modules/
 frontend/dist/*
 !frontend/dist/index.html
-.env
-logs/
-*.part
+backend/internal/api/dist/*
+!backend/internal/api/dist/index.html
+
+# Python
 __pycache__/
 .venv/
+
+# 本地配置与环境
+.env
+.env.local
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
