@@ -45,6 +45,7 @@ func (s *Server) registerCreatorRoutes(mux *http.ServeMux) {
 		{http.MethodGet, "/api/works/{id}", s.handleGetWork},
 		{http.MethodPost, "/api/works/batch-ids", s.handleBatchWorkIDs},
 		{http.MethodPost, "/api/works/batch-delete", s.handleBatchDeleteWorks},
+		{http.MethodPost, "/api/works/redownload", s.handleWorksRedownload},
 		{http.MethodGet, "/api/works/{id}/qualities", s.handleWorkQualities},
 	})
 }
@@ -493,7 +494,8 @@ const worksListQuery = `
 	SELECT w.id, w.item_id, w.title, w.cover_url, w.duration, w.published_at,
 	       w.collection_id, c.name, w.created_at,
 	       w.type,
-	       (SELECT COUNT(*) FROM assets ia WHERE ia.work_id = w.id AND ia.kind = 'image'),
+	       CASE WHEN w.image_count > 0 THEN w.image_count
+	            ELSE (SELECT COUNT(*) FROM assets ia WHERE ia.work_id = w.id AND ia.kind = 'image') END,
 	       ` + dlStatusExpr + `,
 	       CASE WHEN lj.status = 'succeeded' THEN lj.quality END
 	FROM works w
@@ -682,7 +684,8 @@ func (s *Server) handleGetWork(w http.ResponseWriter, r *http.Request) {
 	err := s.deps.DB.QueryRowContext(r.Context(), `
 		SELECT w.id, w.item_id, w.creator_id, w.title, w.cover_url, w.duration, w.published_at,
 		       w.collection_id, c.name, c.mix_id, w.created_at, w.deleted_at, w.type,
-		       (SELECT COUNT(*) FROM assets ia WHERE ia.work_id = w.id AND ia.kind = 'image')
+		       CASE WHEN w.image_count > 0 THEN w.image_count
+	            ELSE (SELECT COUNT(*) FROM assets ia WHERE ia.work_id = w.id AND ia.kind = 'image') END
 		FROM works w
 		LEFT JOIN collections c ON c.id = w.collection_id
 		WHERE w.id = ?`, id).

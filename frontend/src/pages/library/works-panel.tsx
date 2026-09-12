@@ -15,7 +15,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { formatDuration, formatDate } from "../../lib/format";
 import { Link } from "react-router";
-import { Download, FileVideo, Film, Image as ImageIcon, ListFilter, Play, Search, Trash2, X } from "lucide-react";
+import { Download, FileVideo, Film, Image as ImageIcon, ListFilter, Play, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { Pager } from "./pager";
 
 interface WorksPanelProps {
@@ -56,6 +56,9 @@ interface WorksPanelProps {
   /** 删除已选(含已下载文件) */
   onDelete: () => void;
   deletePending: boolean;
+  /** 重新下载(清旧资产按新格式重下) */
+  onRedownload: () => void;
+  redownloadPending: boolean;
   /** 播放 */
   onPlay: (index: number) => void;
 }
@@ -87,7 +90,7 @@ export function WorksPanel(props: WorksPanelProps) {
     page, pageSize, onPageChange, onPageSizeChange,
     selected, pageItems, onToggleRow, onSelectPage, onClearSelection, onSelectAllFiltered, selectAllPending,
     quality, onQualityChange, onDownload, downloadPending, onPlay,
-    onDelete, deletePending,
+    onDelete, deletePending, onRedownload, redownloadPending,
   } = props;
 
   const total = works?.total ?? 0;
@@ -294,6 +297,9 @@ export function WorksPanel(props: WorksPanelProps) {
         </Button>
         <Button variant="ghost" size="sm" disabled={selectAllPending || total === 0} onClick={onSelectAllFiltered}>
           按筛选全选({total})
+        </Button>
+        <Button variant="outline" size="sm" disabled={redownloadPending || selected.size === 0} onClick={onRedownload}>
+          <RefreshCw className="size-3.5" /> 重新下载
         </Button>
         <Button variant="destructive" size="sm" disabled={deletePending || selected.size === 0} onClick={onDelete}>
           <Trash2 className="size-3.5" /> 删除已选

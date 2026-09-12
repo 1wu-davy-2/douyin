@@ -109,6 +109,12 @@ export interface BatchDeleteWorksResult {
   skipped: BatchDeleteSkipped[];
 }
 
+export interface WorksRedownloadResult {
+  enqueued: number[];
+  skipped: { work_id: number; reason: string }[];
+  freed_bytes: number;
+}
+
 export interface CreatorDownloadRootResult {
   ok: boolean;
   /** null = 已清除独立设置,跟随全局。 */

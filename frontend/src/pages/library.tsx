@@ -9,10 +9,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Library as LibraryIcon, Pencil, Plus, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "../api/client";
-import { createCreator, moveCreatorDownloads, rescanCreator, setCreatorDownloadRoot, batchDeleteWorks } from "../api/endpoints";
+import { createCreator, moveCreatorDownloads, rescanCreator, setCreatorDownloadRoot, batchDeleteWorks, worksRedownload } from "../api/endpoints";
 import { ConfirmDialog } from "../components/confirm-dialog";
 import { qk, useCollections, useCreators, useSettings, useWorks } from "../api/queries";
-import type { Creator, MoveDownloadsResult, Quality, WorkDlFilter, WorkSort, WorkTypeFilter } from "../api/types";
+import type { Creator, MoveDownloadsResult, Quality, WorkDlFilter, WorkSort, WorkTypeFilter} from "../api/types";
 import { EmptyState } from "../components/empty-state";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -72,6 +72,7 @@ export function LibraryPage() {
   // 选择集合与画质
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [confirmRedownloadOpen, setConfirmRedownloadOpen] = useState(false);
   const [quality, setQuality] = useState<Quality>("1080p");
 
   const creatorList = creators.data ?? [];
@@ -170,6 +171,22 @@ export function LibraryPage() {
       void queryClient.invalidateQueries({ queryKey: ["creators"] });
     },
     onError: (e) => toast.error("重新扫描失败", { description: e.message }),
+  });
+
+  // ---------- 重新下载 ----------
+  const redownloadMut = useMutation({
+    mutationFn: (v: { ids: number[]; quality?: string }) => worksRedownload(v.ids, v.quality),
+    onSuccess: (res) => {
+      const freed = formatBytes(res.freed_bytes);
+      toast.success(`已重新排队 ${res.enqueued.length} 个作品`,
+        { description: `旧资产已清理(释放 ${freed}),将按图集/视频新格式重新下载` });
+      setSelected(new Set());
+      void queryClient.invalidateQueries({ queryKey: ["works"] });
+      void queryClient.invalidateQueries({ queryKey: ["creators"] });
+      void queryClient.invalidateQueries({ queryKey: qk.downloadsAll });
+      void queryClient.invalidateQueries({ queryKey: qk.downloadsSummary });
+    },
+    onError: (e) => toast.error("重新下载失败", { description: e.message }),
   });
 
   // ---------- 删除已选 ----------
@@ -314,6 +331,8 @@ export function LibraryPage() {
                 downloadPending={downloadMut.isPending}
                 onDelete={() => setConfirmDeleteOpen(true)}
                 deletePending={deleteMut.isPending}
+                onRedownload={() => setConfirmRedownloadOpen(true)}
+                redownloadPending={redownloadMut.isPending}
                 onPlay={(index) => {
                   const playable = pageItems
                     .filter((w) => w.dl_status === "succeeded")
@@ -343,6 +362,15 @@ export function LibraryPage() {
         )}
       </section>
 
+      <ConfirmDialog
+        open={confirmRedownloadOpen}
+        onOpenChange={setConfirmRedownloadOpen}
+        title={`重新下载 ${selected.size} 个作品?`}
+        description="将清理这些作品的旧下载文件与记录,然后按当前格式(图集/视频)重新排队下载。"
+        confirmLabel="重新下载"
+        loading={redownloadMut.isPending}
+        onConfirm={() => redownloadMut.mutate({ ids: [...selected], quality })}
+      />
       <ConfirmDialog
         open={confirmDeleteOpen}
         onOpenChange={setConfirmDeleteOpen}
