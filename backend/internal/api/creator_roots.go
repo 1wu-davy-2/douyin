@@ -178,9 +178,16 @@ func (s *Server) handleCreatorMoveDownloads(w http.ResponseWriter, r *http.Reque
 	if global := s.deps.Store.DownloadRoot(ctx); global != "" {
 		roots = append(roots, global)
 	}
+	// DataDir 可能是相对值(如默认 "./data"):构建根列表前必须转为绝对,
+	// 否则与 assets.path 里的绝对路径做前缀匹配永远失败。
+	dataDir, err := filepath.Abs(s.deps.Cfg.DataDir)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
 	roots = append(roots,
-		filepath.Join(s.deps.Cfg.DataDir, "downloads"), // default root
-		s.deps.Cfg.DataDir, // last resort (historical relative rows)
+		filepath.Join(dataDir, "downloads"), // default root
+		dataDir, // last resort (historical relative rows)
 	)
 
 	res := moveDownloadsResult{FailedFiles: []moveFileFailure{}}
