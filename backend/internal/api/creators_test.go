@@ -136,7 +136,7 @@ func waitScanFinished(t *testing.T, client *http.Client, serverURL string, creat
 }
 
 func TestCreatorScanE2EMock(t *testing.T) {
-	server, _ := newTestServer(t)
+	server, _, _ := newTestServer(t)
 	client := setupAdmin(t, server)
 
 	// SSE stream subscribed before the scan starts: must see the page events.

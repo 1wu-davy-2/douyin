@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"douyin/backend/internal/auth"
 	"douyin/backend/internal/config"
 	"douyin/backend/internal/db"
+	"douyin/backend/internal/downloader"
 	"douyin/backend/internal/events"
 	"douyin/backend/internal/provider"
 	"douyin/backend/internal/scanner"
@@ -20,7 +22,7 @@ import (
 	"douyin/backend/internal/sidecar"
 )
 
-func newTestServer(t *testing.T) (*httptest.Server, *events.Bus) {
+func newTestServer(t *testing.T) (*httptest.Server, *events.Bus, *sql.DB) {
 	t.Helper()
 	cfg := config.Settings{DataDir: t.TempDir(), Mock: true}
 
@@ -41,18 +43,40 @@ func newTestServer(t *testing.T) (*httptest.Server, *events.Bus) {
 	resolver := provider.NewResolver(cfg, mgr, store)
 	scanSvc := scanner.New(context.Background(), resolver, database, bus, store)
 
+	// Downloader (stage 5): BaseURL points at this test server so the mock
+	// provider's relative /mockcdn/... URLs resolve against its own fake CDN.
+	dl := downloader.New(context.Background(), downloader.Deps{
+		DB:      database,
+		Bus:     bus,
+		Store:   store,
+		Source:  resolver,
+		DataDir: cfg.DataDir,
+	})
+
 	server := httptest.NewServer(New(Deps{
-		Cfg:      cfg,
-		Auth:     authService,
-		Bus:      bus,
-		Manager:  mgr,
-		Store:    store,
-		Resolver: resolver,
-		DB:       database,
-		Scanner:  scanSvc,
+		Cfg:        cfg,
+		Auth:       authService,
+		Bus:        bus,
+		Manager:    mgr,
+		Store:      store,
+		Resolver:   resolver,
+		DB:         database,
+		Scanner:    scanSvc,
+		Downloader: dl,
 	}).Handler())
-	t.Cleanup(server.Close)
-	return server, bus
+	t.Cleanup(func() {
+		dl.Stop(3 * time.Second)
+		server.Close()
+	})
+
+	dl.SetBaseURL(server.URL)
+	if _, err := dl.RecoverStale(); err != nil {
+		t.Fatalf("recover stale: %v", err)
+	}
+	if err := dl.Start(); err != nil {
+		t.Fatalf("start downloader: %v", err)
+	}
+	return server, bus, database
 }
 
 // setupAdmin bootstraps the admin and returns a client carrying the session.
@@ -97,7 +121,7 @@ func (t *cookieTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // (including routes not yet implemented, e.g. /api/creators), while /api/health
 // and /api/auth/* stay public.
 func TestAuthGuard(t *testing.T) {
-	server, _ := newTestServer(t)
+	server, _, _ := newTestServer(t)
 
 	cases := []struct {
 		path   string
@@ -133,7 +157,7 @@ func TestAuthGuard(t *testing.T) {
 
 // Health reflects the effective provider (mock, since the test deps set mock).
 func TestHealthShape(t *testing.T) {
-	server, _ := newTestServer(t)
+	server, _, _ := newTestServer(t)
 	resp, err := http.Get(server.URL + "/api/health")
 	if err != nil {
 		t.Fatalf("health: %v", err)
@@ -149,7 +173,7 @@ func TestHealthShape(t *testing.T) {
 
 // SSE: authenticated clients receive contract-framed events.
 func TestSSEStream(t *testing.T) {
-	server, bus := newTestServer(t)
+	server, bus, _ := newTestServer(t)
 	client := setupAdmin(t, server)
 
 	// An SSE stream has no EOF, so bound the whole read with a context
@@ -202,7 +226,7 @@ func TestSSEStream(t *testing.T) {
 
 // Authenticated settings flow: defaults -> patch -> masked read-back.
 func TestSettingsFlow(t *testing.T) {
-	server, _ := newTestServer(t)
+	server, _, _ := newTestServer(t)
 	client := setupAdmin(t, server)
 
 	req, _ := http.NewRequest(http.MethodPatch, server.URL+"/api/settings",
@@ -246,7 +270,7 @@ func TestSettingsFlow(t *testing.T) {
 
 // Static serving: unknown non-/api paths fall back to the embedded index.html.
 func TestStaticFallback(t *testing.T) {
-	server, _ := newTestServer(t)
+	server, _, _ := newTestServer(t)
 	resp, err := http.Get(server.URL + "/creators/42/works")
 	if err != nil {
 		t.Fatalf("static: %v", err)

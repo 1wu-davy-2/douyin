@@ -47,6 +47,10 @@ type Store struct {
 	// onSidecarIdleTimeout, when set, is called after a successful change of
 	// sidecar_idle_timeout_minutes so the running sidecar manager adjusts.
 	onSidecarIdleTimeout func(time.Duration)
+
+	// onDownloadConcurrency, when set, is called after a successful change of
+	// download_concurrency so the running downloader resizes its worker gate.
+	onDownloadConcurrency func(int)
 }
 
 // NewStore creates the store over a migrated database.
@@ -57,6 +61,11 @@ func NewStore(handle *sql.DB, cfg config.Settings) *Store {
 // SetOnSidecarIdleTimeout wires the sidecar-manager notification hook.
 func (s *Store) SetOnSidecarIdleTimeout(fn func(time.Duration)) {
 	s.onSidecarIdleTimeout = fn
+}
+
+// SetOnDownloadConcurrency wires the downloader notification hook.
+func (s *Store) SetOnDownloadConcurrency(fn func(int)) {
+	s.onDownloadConcurrency = fn
 }
 
 // CookieFilePath is where the Douyin cookie is exported for the sidecar
@@ -385,6 +394,9 @@ func (s *Store) Apply(ctx context.Context, patch Patch) (bool, error) {
 	}
 	if n := decodeInt(updates["sidecar_idle_timeout_minutes"]); n > 0 && s.onSidecarIdleTimeout != nil {
 		s.onSidecarIdleTimeout(time.Duration(n) * time.Minute)
+	}
+	if n := decodeInt(updates["download_concurrency"]); n > 0 && s.onDownloadConcurrency != nil {
+		s.onDownloadConcurrency(n)
 	}
 	return cookieChanged, nil
 }

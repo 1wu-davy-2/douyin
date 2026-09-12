@@ -24,6 +24,7 @@ import (
 	"douyin/backend/internal/auth"
 	"douyin/backend/internal/config"
 	"douyin/backend/internal/db"
+	"douyin/backend/internal/downloader"
 	"douyin/backend/internal/events"
 	"douyin/backend/internal/provider"
 	"douyin/backend/internal/scanner"
@@ -88,11 +89,30 @@ func run(ctx context.Context, cfg config.Settings) error {
 	authService := auth.New(database)
 
 	// Scanner (stage 4): owns scan runs, single-flight, SSE progress events.
-	// The Enqueuer seam stays nil until the downloader stage (5) injects it.
 	scanSvc := scanner.New(ctx, resolver, database, bus, store)
 	if err := scanSvc.RecycleStaleRuns(); err != nil {
 		log.Printf("recycle stale scan runs: %v", err)
 	}
+
+	// Downloader (stage 5): persistent job queue + worker pool. Recover rows
+	// left downloading by a previous process, then start the pool and wire it
+	// as the scanner's auto-download enqueuer.
+	dl := downloader.New(ctx, downloader.Deps{
+		DB:      database,
+		Bus:     bus,
+		Store:   store,
+		Source:  resolver,
+		DataDir: cfg.DataDir,
+		BaseURL: fmt.Sprintf("http://127.0.0.1:%d", cfg.Port),
+	})
+	if _, err := dl.RecoverStale(); err != nil {
+		log.Printf("recover stale download jobs: %v", err)
+	}
+	if err := dl.Start(); err != nil {
+		return fmt.Errorf("start downloader: %w", err)
+	}
+	store.SetOnDownloadConcurrency(dl.SetConcurrency)
+	scanSvc.SetEnqueuer(dl)
 
 	// Scheduler (stage 4): single goroutine servicing due subscriptions.
 	sched := scheduler.New(database, scanSvc, store)
@@ -107,14 +127,15 @@ func run(ctx context.Context, cfg config.Settings) error {
 		// Local single-user tool; loopback only per README.
 		Addr: fmt.Sprintf("127.0.0.1:%d", cfg.Port),
 		Handler: api.New(api.Deps{
-			Cfg:      cfg,
-			Auth:     authService,
-			Bus:      bus,
-			Manager:  mgr,
-			Store:    store,
-			Resolver: resolver,
-			DB:       database,
-			Scanner:  scanSvc,
+			Cfg:        cfg,
+			Auth:       authService,
+			Bus:        bus,
+			Manager:    mgr,
+			Store:      store,
+			Resolver:   resolver,
+			DB:         database,
+			Scanner:    scanSvc,
+			Downloader: dl,
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -152,5 +173,10 @@ func run(ctx context.Context, cfg config.Settings) error {
 	}
 	schedWG.Wait()
 	scanSvc.WaitIdle(5 * time.Second)
+	// Stop the downloader last: scans may enqueue auto-download jobs while
+	// finalizing. Stop cancels running transfers (their rows stay
+	// downloading so the next RecoverStale requeues them) and waits up to 5s
+	// for workers to finalize.
+	dl.Stop(downloader.StopGrace)
 	return nil
 }

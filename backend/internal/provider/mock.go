@@ -98,15 +98,20 @@ func (p *MockProvider) PostsPage(_ context.Context, _ string, cursor string, cou
 }
 
 // mockVariants returns the fixed 3-tier quality ladder (descending), with a
-// fake CDN URL per tier.
+// URL per tier. URLs are RELATIVE ("/mockcdn/...") on purpose: the API server
+// hosts the fake CDN handler (internal/api/mockcdn.go, registered when
+// DY_MOCK=1) and the downloader anchors relative paths at its BaseURL
+// (http://127.0.0.1:<port>). The handler streams deterministic pseudo-random
+// bytes so mock mode exercises the full scan -> download -> SSE -> assets
+// chain offline.
 func mockVariants(itemID string) []Variant {
 	return []Variant{
-		{Quality: "1080p", Width: 1080, Height: 1920, Bitrate: 3000000, SizeBytes: 16875000,
-			URL: fmt.Sprintf("https://mock-cdn.example/video/%s/1080p.mp4", itemID)},
-		{Quality: "720p", Width: 720, Height: 1280, Bitrate: 1500000, SizeBytes: 8437500,
-			URL: fmt.Sprintf("https://mock-cdn.example/video/%s/720p.mp4", itemID)},
-		{Quality: "540p", Width: 540, Height: 960, Bitrate: 800000, SizeBytes: 4500000,
-			URL: fmt.Sprintf("https://mock-cdn.example/video/%s/540p.mp4", itemID)},
+		{Quality: "1080p", Width: 1080, Height: 1920, Bitrate: 3000000, SizeBytes: 2097152,
+			URL: fmt.Sprintf("/mockcdn/%s/1080p.mp4", itemID)},
+		{Quality: "720p", Width: 720, Height: 1280, Bitrate: 1500000, SizeBytes: 1048576,
+			URL: fmt.Sprintf("/mockcdn/%s/720p.mp4", itemID)},
+		{Quality: "540p", Width: 540, Height: 960, Bitrate: 800000, SizeBytes: 524288,
+			URL: fmt.Sprintf("/mockcdn/%s/540p.mp4", itemID)},
 	}
 }
 
@@ -118,7 +123,7 @@ func (p *MockProvider) WorkDetail(_ context.Context, itemID string) (*WorkDetail
 	return &WorkDetail{
 		ItemID:   itemID,
 		Title:    fmt.Sprintf("Mock作品 %s", itemID),
-		CoverURL: fmt.Sprintf("https://mock.example/cover/%s.jpg", itemID),
+		CoverURL: fmt.Sprintf("/mockcdn/%s/cover.jpg", itemID),
 		Duration: 45,
 		Variants: mockVariants(itemID),
 	}, nil

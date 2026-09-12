@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"douyin/backend/internal/auth"
 	"douyin/backend/internal/config"
+	"douyin/backend/internal/downloader"
 	"douyin/backend/internal/events"
 	"douyin/backend/internal/provider"
 	"douyin/backend/internal/scanner"
@@ -20,14 +21,15 @@ import (
 
 // Deps carries everything the handlers need.
 type Deps struct {
-	Cfg      config.Settings
-	Auth     *auth.Service
-	Bus      *events.Bus
-	Manager  *sidecar.Manager
-	Store    *settings.Store
-	Resolver *provider.Resolver
-	DB       *sql.DB
-	Scanner  *scanner.Scanner
+	Cfg        config.Settings
+	Auth       *auth.Service
+	Bus        *events.Bus
+	Manager    *sidecar.Manager
+	Store      *settings.Store
+	Resolver   *provider.Resolver
+	DB         *sql.DB
+	Scanner    *scanner.Scanner
+	Downloader *downloader.Downloader
 }
 
 // Server is the HTTP application.
@@ -58,16 +60,29 @@ func (s *Server) Handler() http.Handler {
 	s.registerCreatorRoutes(mux)      // creators.go (works + collections included)
 	s.registerSubscriptionRoutes(mux) // subscriptions.go
 
-	// -- Later stages (registered by the corresponding files) -----------------
-	// downloads.go, assets.go currently hold no routes; every unregistered
-	// /api path still passes the auth guard below, so it answers 401 when
-	// unauthenticated instead of leaking a 404.
+	// -- Stage 5 (implemented) ------------------------------------------------
+	s.registerDownloadRoutes(mux) // downloads.go
+	s.registerAssetRoutes(mux)    // assets.go
+
+	// Fake CDN for mock mode: the mock provider hands out relative
+	// /mockcdn/... URLs that the downloader resolves against this server.
+	if s.deps.Cfg.Mock {
+		s.registerMockCDN(mux) // mockcdn.go
+	}
+
+	// Every unregistered /api path still passes the auth guard below, so it
+	// answers 401 when unauthenticated instead of leaking a 404.
 
 	apiHandler := s.authGuard(mux)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
 			apiHandler.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/mockcdn/") {
+			// Fake CDN (mock mode only; route not registered otherwise).
+			s.serveMockCDN(w, r)
 			return
 		}
 		s.serveStatic(w, r)

@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -151,14 +152,19 @@ func TestMockWorkDetail(t *testing.T) {
 	qualities := map[string]Variant{}
 	for _, v := range detail.Variants {
 		qualities[v.Quality] = v
-		if v.URL == "" {
-			t.Fatalf("quality %s: missing CDN url", v.Quality)
+		// Mock URLs are relative /mockcdn/... paths hosted by the API server
+		// (the downloader anchors them at its BaseURL).
+		if !strings.HasPrefix(v.URL, "/mockcdn/mock_0007/") || !strings.HasSuffix(v.URL, ".mp4") {
+			t.Fatalf("quality %s: unexpected mock url %q", v.Quality, v.URL)
 		}
 	}
+	if !strings.HasPrefix(detail.CoverURL, "/mockcdn/mock_0007/cover.jpg") {
+		t.Fatalf("unexpected mock cover url %q", detail.CoverURL)
+	}
 	for q, want := range map[string][4]int{
-		"1080p": {1080, 1920, 3000000, 16875000},
-		"720p":  {720, 1280, 1500000, 8437500},
-		"540p":  {540, 960, 800000, 4500000},
+		"1080p": {1080, 1920, 3000000, 2097152},
+		"720p":  {720, 1280, 1500000, 1048576},
+		"540p":  {540, 960, 800000, 524288},
 	} {
 		v, ok := qualities[q]
 		if !ok {
