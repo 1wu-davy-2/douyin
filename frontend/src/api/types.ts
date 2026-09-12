@@ -9,9 +9,9 @@ export type TargetType = "creator" | "collection";
 export type ScanStatus = "running" | "succeeded" | "partial" | "failed";
 export type Quality = "540p" | "720p" | "1080p";
 export type WorkSort = "published_at_desc" | "published_at_asc" | "duration_desc";
-export type WorkType = "video" | "image";
+export type WorkType = "video" | "image" | "daily";
 /** works 列表/batch-ids 的 type 筛选参数:live = 含动图/实况片段的图集。 */
-export type WorkTypeFilter = "video" | "image" | "live";
+export type WorkTypeFilter = "video" | "image" | "live" | "daily";
 /** works 列表/batch-ids 的 dl 筛选参数(按 dl_status 过滤,canceled 不在契约筛选枚举内)。 */
 export type WorkDlFilter = Exclude<DLStatus, "canceled">;
 export type AssetKind = "video" | "image" | "cover" | "metadata";

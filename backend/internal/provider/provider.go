@@ -33,6 +33,7 @@ type Provider interface {
 const (
 	TypeVideo = "video"
 	TypeImage = "image"
+	TypeDaily = "daily"
 )
 
 // Profile mirrors the sidecar GET /profile response.

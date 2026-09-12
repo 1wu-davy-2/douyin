@@ -125,7 +125,7 @@ func (p *MockProvider) PostsPage(_ context.Context, _ string, cursor string, cou
 			PublishedAt: mockPublishedAt(pos),
 			MixID:       mixID,
 			MixName:     mixName,
-			Type:        kind,
+			Type:        mockTypeFor(idx, kind),
 			ImageCount:  imageCount,
 		})
 	}
@@ -204,4 +204,13 @@ func (p *MockProvider) WorkDetail(_ context.Context, itemID string) (*WorkDetail
 		Duration: 45,
 		Variants: mockVariants(itemID),
 	}, nil
+}
+
+// mockTypeFor marks every 9th mock work as "daily" (aweme_type 150) while
+// keeping its content form (video or image) intact; mirrors the sidecar mock.
+func mockTypeFor(idx int, kind string) string {
+	if idx%9 == 8 {
+		return TypeDaily
+	}
+	return kind
 }

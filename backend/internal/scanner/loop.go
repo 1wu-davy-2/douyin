@@ -472,7 +472,9 @@ func persistPage(ctx context.Context, conn *sql.Conn, creatorID int64, page *pro
 		// Work type (stage 9): the sidecar classifies galleries
 		// ("aweme.images" non-empty -> image). Unknown/empty -> video.
 		workType := it.Type
-		if workType != provider.TypeImage && workType != provider.TypeVideo {
+		switch workType {
+		case provider.TypeImage, provider.TypeVideo, provider.TypeDaily:
+		default:
 			workType = provider.TypeVideo
 		}
 

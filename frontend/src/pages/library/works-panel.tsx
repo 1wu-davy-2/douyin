@@ -15,7 +15,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { formatDuration, formatDate } from "../../lib/format";
 import { Link } from "react-router";
-import { Download, FileVideo, Film, Image as ImageIcon, ListFilter, Play, RefreshCw, Search, Trash2, X } from "lucide-react";
+import { Download, FileVideo, Film, Image as ImageIcon, ListFilter, Play, RefreshCw, Search, Sunrise, Trash2, X } from "lucide-react";
 import { Pager } from "./pager";
 
 interface WorksPanelProps {
@@ -73,6 +73,7 @@ const TYPE_OPTIONS: { value: WorkTypeFilter; label: string }[] = [
   { value: "video", label: "视频" },
   { value: "image", label: "图集" },
   { value: "live", label: "动图" },
+  { value: "daily", label: "日常" },
 ];
 
 const DL_OPTIONS: { value: WorkDlFilter; label: string }[] = [
@@ -260,7 +261,11 @@ export function WorksPanel(props: WorksPanelProps) {
                   <TableCell className="max-w-0">
                     <div className="flex items-center gap-1.5">
                       <p className="max-w-[380px] truncate" title={w.title}>{w.title}</p>
-                      {w.type === "image" ? (
+                      {w.type === "daily" ? (
+                        <Badge variant="secondary" className="shrink-0">
+                          <Sunrise /> 日常
+                        </Badge>
+                      ) : w.type === "image" ? (
                         <Badge variant="secondary" className="shrink-0">
                           <ImageIcon /> 图集 {w.image_count} 张
                         </Badge>

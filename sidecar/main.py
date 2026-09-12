@@ -135,6 +135,7 @@ def mock_posts(sec_uid: str, cursor: int, count: int) -> dict[str, Any]:
         pos = idx + 1
         mix_id, mix_name = mock_mix_for(pos)
         kind, image_count = mock_kind_for(idx)
+        mock_type = "daily" if idx % 9 == 8 else kind
         items.append(
             {
                 "item_id": f"mock_{pos:04d}",
@@ -144,7 +145,7 @@ def mock_posts(sec_uid: str, cursor: int, count: int) -> dict[str, Any]:
                 "published_at": rfc3339(MOCK_BASE_TS - (pos - 1) * 86400),
                 "mix_id": mix_id,
                 "mix_name": mix_name,
-                "type": kind,
+                "type": mock_type,
                 "image_count": image_count,
             }
         )
@@ -399,7 +400,7 @@ def f2_fetch_posts(sec_uid: str, cursor: int, count: int, cookie: str) -> dict[s
                 "published_at": rfc3339(create_time) if create_time else None,
                 "mix_id": str(mix.get("mix_id")) if mix.get("mix_id") is not None else None,
                 "mix_name": str(mix.get("mix_name")) if mix.get("mix_name") is not None else None,
-                "type": "image" if is_image else "video",
+                "type": "daily" if aweme.get("aweme_type") == 150 else ("image" if is_image else "video"),
                 "image_count": len(images) if is_image else 0,
             }
         )

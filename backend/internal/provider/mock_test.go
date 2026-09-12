@@ -242,11 +242,19 @@ func TestMockImagePostRules(t *testing.T) {
 				t.Fatalf("parse %s: %v", item.ItemID, err)
 			}
 			idx := pos - 1
+			wantType := TypeVideo
 			if idx%7 == 6 {
+				wantType = TypeImage
 				imageCount++
-				if item.Type != TypeImage {
-					t.Fatalf("pos %d: type = %q, want image", pos, item.Type)
-				}
+			}
+			// idx%9==8 的作品同时被标记为 daily(aweme_type 150 模拟),覆盖图集/视频形态
+			if idx%9 == 8 {
+				wantType = TypeDaily
+			}
+			if item.Type != wantType {
+				t.Fatalf("pos %d: type = %q, want %q", pos, item.Type, wantType)
+			}
+			if idx%7 == 6 {
 				if want := 3 + idx%4; item.ImageCount != want {
 					t.Fatalf("pos %d: image_count = %d, want %d", pos, item.ImageCount, want)
 				}
@@ -254,6 +262,13 @@ func TestMockImagePostRules(t *testing.T) {
 					t.Fatalf("pos %d: image post duration = %d, want 0", pos, item.Duration)
 				}
 			} else {
+				if idx%9 == 8 {
+					// daily 标记覆盖(内容仍是视频)
+					if item.Type != TypeDaily || item.ImageCount != 0 {
+						t.Fatalf("pos %d: type=%q count=%d, want daily/0", pos, item.Type, item.ImageCount)
+					}
+					return
+				}
 				if item.Type != TypeVideo || item.ImageCount != 0 {
 					t.Fatalf("pos %d: type=%q count=%d, want video/0", pos, item.Type, item.ImageCount)
 				}

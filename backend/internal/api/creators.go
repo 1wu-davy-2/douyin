@@ -452,6 +452,8 @@ func (f workFilter) where() (string, []any) {
 		where += ` AND w.type = 'video'`
 	case "image":
 		where += ` AND w.type = 'image'`
+	case "daily":
+		where += ` AND w.type = 'daily'`
 	case "live":
 		// Live gallery: an image work carrying live video clips
 		// (assets.kind='video', quality LIKE 'live%').

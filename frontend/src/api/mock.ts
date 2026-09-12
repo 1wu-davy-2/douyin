@@ -254,12 +254,13 @@ function imageSvg(seed: number, n: number, total: number): string {
  * - index % 7 == 6 → image 作品,3-6 张图(3 + index % 4)
  * - index % 14 == 13 → 另带 1 段动图/实况视频片段(live)
  */
-function imageRuleFor(index: number): { isImage: boolean; imageCount: number; liveCount: number } {
+function imageRuleFor(index: number): { isImage: boolean; imageCount: number; liveCount: number; isDaily: boolean } {
   const isImage = index % 7 === 6;
-  if (!isImage) return { isImage: false, imageCount: 0, liveCount: 0 };
+  const isDaily = index % 9 === 8;
+  if (!isImage) return { isImage: false, imageCount: 0, liveCount: 0, isDaily };
   const imageCount = 3 + (index % 4);
   const liveCount = index % 14 === 13 ? 1 : 0;
-  return { isImage, imageCount, liveCount };
+  return { isImage, imageCount, liveCount, isDaily };
 }
 
 function extractSecUid(url: string): string {
@@ -345,7 +346,7 @@ function makeWorks(creator: MockCreator, count: number, baseTime: number, cols: 
       published_at: iso(t),
       collection_id: col ? col.id : null,
       created_at: iso(baseTime),
-      type: rule.isImage ? "image" : "video",
+      type: rule.isDaily ? "daily" : rule.isImage ? "image" : "video",
       image_count: rule.imageCount,
       live_count: rule.liveCount,
       image_urls: imageUrls,
@@ -739,7 +740,7 @@ function addWorks(creator: MockCreator, count: number): number {
       published_at: iso(t),
       collection_id: col ? col.id : null,
       created_at: iso(now),
-      type: rule.isImage ? "image" : "video",
+      type: rule.isDaily ? "daily" : rule.isImage ? "image" : "video",
       image_count: rule.imageCount,
       live_count: rule.liveCount,
       image_urls: imageUrls,
