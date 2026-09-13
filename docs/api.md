@@ -35,7 +35,7 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/creators` | `{profile_url, download_root?: string, auto_download?: bool, quality?: string, group?: string, alias?: string}` → **202** `{creator_id, scan_id, creator: {...}}`(异步扫描,SSE 报进度)。可选参数:`download_root` 添加时即设独立下载根(校验同 download-root 端点);`auto_download=true` 为该博主创建 creator 级订阅(interval_minutes 默认 60,quality 默认全局);`group` 初始分组名(空=未分组);`alias` 显示别名。URL 支持主页链接或 sec_uid。重复添加返回已有 creator 并同样触发扫描(可选参数同样生效) |
+| POST | `/api/creators` | `{profile_url, download_root?: string, subscribe?: {interval_minutes: int, quality?: string, auto_download: bool}, group?: string, alias?: string}` → **202** `{creator_id, scan_id, creator: {...}}`(异步扫描,SSE 报进度)。可选参数:`download_root` 添加时即设独立下载根(校验同 download-root 端点);`subscribe` 非空时同时创建 creator 级订阅(interval_minutes 必填,quality 缺省=全局默认,auto_download 默认 true);`group` 初始分组名(空=未分组);`alias` 显示别名。URL 支持主页链接或 sec_uid。重复添加返回已有 creator 并同样触发扫描(可选参数同样生效) |
 | PATCH | `/api/creators/{id}` | `{alias?: string\|null, group?: string\|null}` → `{ok, alias, group}`;alias null/空=清除别名(显示默认昵称),group null/空=移出分组 |
 | GET | `/api/creators` | → `[{id, sec_uid, nickname, alias, group, avatar_url, profile_url, reported_work_count, works_count, downloaded_count, download_bytes, created_at}]`(按 created_at desc);`download_bytes` = 已下载资产字节总和;`alias` 用户设置的显示别名(null=用 nickname);`group` 分组名(null=未分组) |
 | GET | `/api/creators/{id}` | 单个详情,字段同上 + `last_scan: {id, status, pages, new_count, updated_count, empty_pages, completeness, started_at, finished_at, last_error}` |
@@ -44,9 +44,9 @@
 | POST | `/api/creators/{id}/move-downloads` | `{target_root: string}` 把该博主已下载文件整体移动到新根(保持相对结构;跨盘=复制+校验+删源;该博主存在 downloading 任务时 409)→ `{moved_files, moved_bytes, failed_files:[{path,error}]}` |
 | POST | `/api/creators/{id}/rescan` | `{full?:bool}` → 202 `{scan_id}`;full=true 全量,默认增量 |
 | GET | `/api/creators/{id}/collections` | → `[{id, mix_id, name, cover_url, works_count, downloaded_count}]` |
-| GET | `/api/creators/{id}/works` | `?page=&page_size=&q=&collection_id=&sort=published_at_desc\|published_at_asc\|duration_desc&type=video\|image\|live&dl=none\|queued\|downloading\|succeeded\|failed` → 分页作品。`type=live` 表示含动图片段的图集(EXISTS live 资产);`dl` 按 dl_status 过滤。item 字段见下 |
+| GET | `/api/creators/{id}/works` | `?page=&page_size=&q=&collection_id=&exclude_collection_ids=1,2,3&sort=published_at_desc\|published_at_asc\|duration_desc&type=video\|image\|live\|daily&dl=none\|queued\|downloading\|succeeded\|failed` → 分页作品。`type=live` 表示含动图片段的图集(EXISTS live 资产);`collection_id=none` 单发;`exclude_collection_ids` 逗号分隔合集 id,排除这些合集的作品(与 collection_id 互斥,同时给出以 exclude 为准);`dl` 按 dl_status 过滤。item 字段见下 |
 | GET | `/api/works/{id}` | 单作品详情(含 `mix_info`、`asset` 已下载资产列表、`last_job` 最新任务摘要) |
-| POST | `/api/works/batch-ids` | `{creator_id, q?, collection_id?, type?, dl?}` → `{ids:[int]}`(**仅 id**,服务"按筛选全选";筛选条件与 works 列表完全一致) |
+| POST | `/api/works/batch-ids` | `{creator_id, q?, collection_id?, exclude_collection_ids?: [int], type?, dl?}` → `{ids:[int]}`(**仅 id**,服务"按筛选全选";筛选条件与 works 列表完全一致,exclude 为数组) |
 | GET | `/api/works/{id}/qualities` | 实时解析清晰度 → `[{quality:"540p"\|"720p"\|"1080p", width, height, bitrate, size_bytes}]`(需侧车在线;离线 503) |
 
 work item 字段(白名单,列表用):
