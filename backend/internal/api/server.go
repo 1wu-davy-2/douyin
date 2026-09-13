@@ -12,6 +12,7 @@ import (
 	"douyin/backend/internal/scanner"
 	"douyin/backend/internal/settings"
 	"douyin/backend/internal/sidecar"
+	"douyin/backend/internal/uploader"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -30,6 +31,9 @@ type Deps struct {
 	DB         *sql.DB
 	Scanner    *scanner.Scanner
 	Downloader *downloader.Downloader
+	// Uploader is the MinIO sync service (may be nil: not wired / tests).
+	// Nil handlers answer the test/status endpoints with ok=false / zeros.
+	Uploader *uploader.Uploader
 }
 
 // Server is the HTTP application.

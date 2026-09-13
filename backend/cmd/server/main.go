@@ -33,6 +33,7 @@ import (
 	"douyin/backend/internal/scheduler"
 	"douyin/backend/internal/settings"
 	"douyin/backend/internal/sidecar"
+	"douyin/backend/internal/uploader"
 )
 
 // modeArg scans the raw argument list for -mode/--mode (space or = form) and
@@ -115,6 +116,13 @@ func run(ctx context.Context, cfg config.Settings) error {
 	store := settings.NewStore(database, cfg)
 	store.SetOnSidecarIdleTimeout(mgr.SetIdleTimeout)
 
+	// MinIO sync (docs/MINIO_PLAN.md option A): fire-and-forget uploads of
+	// finished downloads. The bounded queue is drained on shutdown; a
+	// disabled/broken MinIO never touches local download state.
+	up := uploader.New(store)
+	up.Start()
+	store.SetOnMinioConcurrency(up.SetConcurrency)
+
 	resolver := provider.NewResolver(cfg, mgr, store)
 	authService := auth.New(database)
 
@@ -128,13 +136,14 @@ func run(ctx context.Context, cfg config.Settings) error {
 	// left downloading by a previous process, then start the pool and wire it
 	// as the scanner's auto-download enqueuer.
 	dl := downloader.New(ctx, downloader.Deps{
-		DB:      database,
-		Bus:     bus,
-		Store:   store,
-		Source:  resolver,
-		DataDir: cfg.DataDir,
-		BaseURL: fmt.Sprintf("http://127.0.0.1:%d", cfg.Port),
-		Mock:    cfg.Mock,
+		DB:       database,
+		Bus:      bus,
+		Store:    store,
+		Source:   resolver,
+		DataDir:  cfg.DataDir,
+		BaseURL:  fmt.Sprintf("http://127.0.0.1:%d", cfg.Port),
+		Mock:     cfg.Mock,
+		Uploader: up,
 	})
 	if _, err := dl.RecoverStale(); err != nil {
 		log.Printf("recover stale download jobs: %v", err)
@@ -167,6 +176,7 @@ func run(ctx context.Context, cfg config.Settings) error {
 			DB:         database,
 			Scanner:    scanSvc,
 			Downloader: dl,
+			Uploader:   up,
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -209,5 +219,9 @@ func run(ctx context.Context, cfg config.Settings) error {
 	// downloading so the next RecoverStale requeues them) and waits up to 5s
 	// for workers to finalize.
 	dl.Stop(downloader.StopGrace)
+	// Drain the MinIO upload queue after the downloader is down. The timeout
+	// only bounds the wait: leftover items are dropped, in-flight uploads
+	// keep running on background contexts (they are best-effort by design).
+	up.Stop(10 * time.Second)
 	return nil
 }

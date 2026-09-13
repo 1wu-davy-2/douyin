@@ -13,6 +13,9 @@ func (s *Server) registerSettingsRoutes(mux *http.ServeMux) {
 		{http.MethodGet, "/api/settings", s.handleSettingsGet},
 		{http.MethodPatch, "/api/settings", s.handleSettingsPatch},
 		{http.MethodPost, "/api/notifications/test", s.handleNotificationsTest},
+		// MinIO sync (docs/MINIO_PLAN.md): connection test + queue status.
+		{http.MethodPost, "/api/settings/minio/test", s.handleMinioTest},
+		{http.MethodGet, "/api/settings/minio/status", s.handleMinioStatus},
 	})
 }
 

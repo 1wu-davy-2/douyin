@@ -34,6 +34,7 @@ import (
 
 	"douyin/backend/internal/db"
 	"douyin/backend/internal/provider"
+	"douyin/backend/internal/uploader"
 )
 
 // jobRow is the joined job+work+creator snapshot a worker runs against.
@@ -225,7 +226,8 @@ func (d *Downloader) processVideoWork(ctx context.Context, job *jobRow, detail *
 		return
 	}
 
-	// 8. Succeeded.
+	// 8. Succeeded. Assets are final; hand the produced files to the MinIO
+	// sync (fire-and-forget, never affects the job state below).
 	d.removeTracker(job.ID)
 	finished := nowRFC3339()
 	if _, err := d.db.ExecContext(ctx, `
@@ -236,6 +238,11 @@ func (d *Downloader) processVideoWork(ctx context.Context, job *jobRow, detail *
 	}
 	log.Printf("[downloader] job %d: succeeded %s (%d bytes, %s)", job.ID, filepath.Base(target), written, variant.Quality)
 	d.publishStatus(job.ID, job.WorkID, StatusSucceeded, nil)
+	d.enqueueUpload(ctx, job,
+		uploadFile{path: target, size: written},
+		uploadFile{path: coverPath, size: coverSize},
+		uploadFile{path: metaPath},
+	)
 }
 
 // processImageWork downloads an image (gallery) work into the aggregated
@@ -371,6 +378,60 @@ func (d *Downloader) processImageWork(ctx context.Context, job *jobRow, detail *
 	log.Printf("[downloader] job %d: succeeded gallery %s (%d file(s), %d bytes)",
 		job.ID, safeName(job.Title, maxTitleLength), totalFiles, totalBytes)
 	d.publishStatus(job.ID, job.WorkID, StatusSucceeded, nil)
+	files := make([]uploadFile, 0, len(media)+2)
+	for _, m := range media {
+		files = append(files, uploadFile{path: m.path, size: m.size})
+	}
+	files = append(files,
+		uploadFile{path: coverPath, size: coverSize},
+		uploadFile{path: metaPath},
+	)
+	d.enqueueUpload(ctx, job, files...)
+}
+
+// ------------------------------------------------------------- minio sync --
+
+// uploadFile is one produced file offered to the MinIO uploader. size<=0
+// means "stat the file when building the upload items".
+type uploadFile struct {
+	path string
+	size int64
+}
+
+// enqueueUpload offers the job's produced files for MinIO sync after the job
+// is already succeeded locally. Strictly fire-and-forget (docs/MINIO_PLAN.md
+// option A): a nil/disabled uploader is a no-op, vanished files are skipped,
+// the queue is non-blocking, and nothing here can change the local job state.
+// Object keys anchor on {prefix}{sec_uid}/{item_id}/{filename} so renames
+// never drift; media servers read titles from the synced metadata.json.
+func (d *Downloader) enqueueUpload(ctx context.Context, job *jobRow, files ...uploadFile) {
+	if d.uploader == nil || len(files) == 0 {
+		return
+	}
+	if !d.uploader.Enabled(ctx) {
+		return
+	}
+	prefix := d.uploader.Prefix(ctx)
+	items := make([]uploader.UploadItem, 0, len(files))
+	for _, f := range files {
+		if f.path == "" {
+			continue
+		}
+		size := f.size
+		if size <= 0 {
+			fi, err := os.Stat(f.path)
+			if err != nil {
+				continue // file vanished: nothing to sync
+			}
+			size = fi.Size()
+		}
+		items = append(items, uploader.UploadItem{
+			LocalPath: f.path,
+			ObjectKey: uploader.ObjectKey(prefix, job.SecUID, job.ItemID, filepath.Base(f.path)),
+			SizeBytes: size,
+		})
+	}
+	d.uploader.Enqueue(items)
 }
 
 // extFromURL infers a file extension from a media URL (query/fragment

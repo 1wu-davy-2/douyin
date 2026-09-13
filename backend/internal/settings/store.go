@@ -4,7 +4,8 @@
 // sidecar on cookie changes, and owns the notification (SMTP test) helper.
 //
 // Sensitive values: the cookie is masked to its first 8 characters + "..."
-// when returned over the API; the SMTP password is never echoed at all.
+// when returned over the API; the SMTP password and the MinIO secret key are
+// never echoed at all (their views only carry a *_set boolean).
 package settings
 
 import (
@@ -52,6 +53,10 @@ type Store struct {
 	// onDownloadConcurrency, when set, is called after a successful change of
 	// download_concurrency so the running downloader resizes its worker gate.
 	onDownloadConcurrency func(int)
+
+	// onMinioConcurrency, when set, is called after a successful change of
+	// minio_concurrency so the running uploader resizes its gate.
+	onMinioConcurrency func(int)
 }
 
 // NewStore creates the store over a migrated database.
@@ -67,6 +72,11 @@ func (s *Store) SetOnSidecarIdleTimeout(fn func(time.Duration)) {
 // SetOnDownloadConcurrency wires the downloader notification hook.
 func (s *Store) SetOnDownloadConcurrency(fn func(int)) {
 	s.onDownloadConcurrency = fn
+}
+
+// SetOnMinioConcurrency wires the uploader notification hook.
+func (s *Store) SetOnMinioConcurrency(fn func(int)) {
+	s.onMinioConcurrency = fn
 }
 
 // CookieFilePath is where the Douyin cookie is exported for the sidecar
@@ -183,20 +193,21 @@ type SMTPView struct {
 
 // View is the GET /api/settings response shape.
 type View struct {
-	ProviderMode             string   `json:"provider_mode"`
-	Cookie                   string   `json:"cookie"`
-	DownloadRoot             string   `json:"download_root"`
-	DownloadConcurrency      int      `json:"download_concurrency"`
-	DownloadQuality          string   `json:"download_quality"`
-	ScanPageDelayMs          int      `json:"scan_page_delay_ms"`
-	ScanMaxEmptyPages        int      `json:"scan_max_empty_pages"`
-	ScanConcurrency          int      `json:"scan_concurrency"`
-	IncrementalStopPages     int      `json:"incremental_stop_pages"`
-	CompletenessGapThreshold int      `json:"completeness_gap_threshold"`
-	SidecarIdleTimeoutMin    int      `json:"sidecar_idle_timeout_minutes"`
-	SMTP                     SMTPView `json:"smtp"`
-	NotifyOnNewWork          bool     `json:"notify_on_new_work"`
-	NotifyOnFailure          bool     `json:"notify_on_failure"`
+	ProviderMode             string    `json:"provider_mode"`
+	Cookie                   string    `json:"cookie"`
+	DownloadRoot             string    `json:"download_root"`
+	DownloadConcurrency      int       `json:"download_concurrency"`
+	DownloadQuality          string    `json:"download_quality"`
+	ScanPageDelayMs          int       `json:"scan_page_delay_ms"`
+	ScanMaxEmptyPages        int       `json:"scan_max_empty_pages"`
+	ScanConcurrency          int       `json:"scan_concurrency"`
+	IncrementalStopPages     int       `json:"incremental_stop_pages"`
+	CompletenessGapThreshold int       `json:"completeness_gap_threshold"`
+	SidecarIdleTimeoutMin    int       `json:"sidecar_idle_timeout_minutes"`
+	SMTP                     SMTPView  `json:"smtp"`
+	Minio                    MinioView `json:"minio"`
+	NotifyOnNewWork          bool      `json:"notify_on_new_work"`
+	NotifyOnFailure          bool      `json:"notify_on_failure"`
 }
 
 // maskCookie keeps the first 8 characters and appends "..."; values of 8
@@ -282,6 +293,7 @@ func (s *Store) View(ctx context.Context) (View, error) {
 	}
 	v.NotifyOnNewWork = decodeBool(values["notify_on_new_work"])
 	v.NotifyOnFailure = decodeBool(values["notify_on_failure"])
+	v.Minio = minioView(values)
 	return v, nil
 }
 
@@ -306,20 +318,21 @@ func (s *Store) SMTPSettings(ctx context.Context) SMTP {
 
 // Patch is the accepted PATCH /api/settings body (partial update; nil = keep).
 type Patch struct {
-	ProviderMode             *string    `json:"provider_mode"`
-	Cookie                   *string    `json:"cookie"`
-	DownloadRoot             *string    `json:"download_root"`
-	DownloadConcurrency      *int       `json:"download_concurrency"`
-	DownloadQuality          *string    `json:"download_quality"`
-	ScanPageDelayMs          *int       `json:"scan_page_delay_ms"`
-	ScanMaxEmptyPages        *int       `json:"scan_max_empty_pages"`
-	ScanConcurrency          *int       `json:"scan_concurrency"`
-	IncrementalStopPages     *int       `json:"incremental_stop_pages"`
-	CompletenessGapThreshold *int       `json:"completeness_gap_threshold"`
-	SidecarIdleTimeoutMin    *int       `json:"sidecar_idle_timeout_minutes"`
-	SMTP                     *SMTPPatch `json:"smtp"`
-	NotifyOnNewWork          *bool      `json:"notify_on_new_work"`
-	NotifyOnFailure          *bool      `json:"notify_on_failure"`
+	ProviderMode             *string     `json:"provider_mode"`
+	Cookie                   *string     `json:"cookie"`
+	DownloadRoot             *string     `json:"download_root"`
+	DownloadConcurrency      *int        `json:"download_concurrency"`
+	DownloadQuality          *string     `json:"download_quality"`
+	ScanPageDelayMs          *int        `json:"scan_page_delay_ms"`
+	ScanMaxEmptyPages        *int        `json:"scan_max_empty_pages"`
+	ScanConcurrency          *int        `json:"scan_concurrency"`
+	IncrementalStopPages     *int        `json:"incremental_stop_pages"`
+	CompletenessGapThreshold *int        `json:"completeness_gap_threshold"`
+	SidecarIdleTimeoutMin    *int        `json:"sidecar_idle_timeout_minutes"`
+	SMTP                     *SMTPPatch  `json:"smtp"`
+	Minio                    *MinioPatch `json:"minio"`
+	NotifyOnNewWork          *bool       `json:"notify_on_new_work"`
+	NotifyOnFailure          *bool       `json:"notify_on_failure"`
 }
 
 // SMTPPatch partially updates the smtp object.
@@ -415,6 +428,11 @@ func (s *Store) Apply(ctx context.Context, patch Patch) (bool, error) {
 	if patch.NotifyOnFailure != nil {
 		updates["notify_on_failure"] = mustJSON(*patch.NotifyOnFailure)
 	}
+	if patch.Minio != nil {
+		if err := s.applyMinio(ctx, patch.Minio, updates); err != nil {
+			return false, err
+		}
+	}
 	if patch.SMTP != nil {
 		p := patch.SMTP
 		if p.Port != nil && (*p.Port < 1 || *p.Port > 65535) {
@@ -483,6 +501,9 @@ func (s *Store) Apply(ctx context.Context, patch Patch) (bool, error) {
 	}
 	if n := decodeInt(updates["download_concurrency"]); n > 0 && s.onDownloadConcurrency != nil {
 		s.onDownloadConcurrency(n)
+	}
+	if n := decodeInt(updates["minio_concurrency"]); n > 0 && s.onMinioConcurrency != nil {
+		s.onMinioConcurrency(n)
 	}
 	return cookieChanged, nil
 }

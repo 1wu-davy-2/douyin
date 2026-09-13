@@ -38,6 +38,7 @@ import (
 	"douyin/backend/internal/events"
 	"douyin/backend/internal/provider"
 	"douyin/backend/internal/settings"
+	"douyin/backend/internal/uploader"
 )
 
 // Job statuses (download_jobs.status) - frozen by docs/api.md.
@@ -101,19 +102,25 @@ type Deps struct {
 	Workers int
 	// Mock disables inter-job pacing (mock CDN needs no rate limiting).
 	Mock bool
+	// Uploader receives the produced files of succeeded jobs for MinIO sync
+	// (docs/MINIO_PLAN.md option A). May be nil (sync not wired / tests).
+	// Strictly fire-and-forget: the hook runs after the job is already
+	// succeeded locally and can never influence job state.
+	Uploader *uploader.Uploader
 }
 
 // Downloader owns the job queue and its workers.
 type Downloader struct {
-	db      *sql.DB
-	bus     *events.Bus
-	store   *settings.Store
-	src     ProviderSource
-	dataDir string
-	baseURL string
-	client  *http.Client
-	workers int
-	mock    bool
+	db       *sql.DB
+	bus      *events.Bus
+	store    *settings.Store
+	src      ProviderSource
+	dataDir  string
+	baseURL  string
+	client   *http.Client
+	workers  int
+	mock     bool
+	uploader *uploader.Uploader
 
 	baseCtx   context.Context
 	cancelAll context.CancelFunc
@@ -155,6 +162,7 @@ func New(parent context.Context, deps Deps) *Downloader {
 		client:    client,
 		workers:   workers,
 		mock:      deps.Mock,
+		uploader:  deps.Uploader,
 		baseCtx:   ctx,
 		cancelAll: cancel,
 		gate:      newGate(defaultConcurrency),
