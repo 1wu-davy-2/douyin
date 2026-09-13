@@ -4,12 +4,12 @@
  * Cookie / SMTP 密码仅在用户修改后随保存提交(打码值原样不发送)。
  */
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MailCheck, Save } from "lucide-react";
 import { toast } from "sonner";
-import { changePassword, patchSettings, testNotification } from "../api/endpoints";
+import { changePassword, patchSettings, testNotification, testMinio, minioStatus } from "../api/endpoints";
 import { qk, useSettings } from "../api/queries";
-import type { Quality, Settings, SettingsPatch } from "../api/types";
+import type { Quality, Settings, SettingsPatch, MinioSettings } from "../api/types";
 import { QUALITIES } from "../api/types";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../components/ui/card";
@@ -30,6 +30,7 @@ interface SettingsForm {
   incremental_stop_pages: string;
   scan_concurrency: string;
   completeness_gap_threshold: string;
+  minio: { enabled: boolean; endpoint: string; bucket: string; access_key: string; password: string; use_ssl: boolean; prefix: string; concurrency: string };
   smtp: { host: string; port: string; username: string; password: string; from: string; to: string };
   notify_on_new_work: boolean;
   notify_on_failure: boolean;
@@ -47,6 +48,16 @@ function toForm(s: Settings): SettingsForm {
     incremental_stop_pages: String(s.incremental_stop_pages),
     scan_concurrency: String(s.scan_concurrency),
     completeness_gap_threshold: String(s.completeness_gap_threshold),
+    minio: {
+      enabled: s.minio.enabled,
+      endpoint: s.minio.endpoint,
+      bucket: s.minio.bucket,
+      access_key: s.minio.access_key,
+      password: "",
+      use_ssl: s.minio.use_ssl,
+      prefix: s.minio.prefix,
+      concurrency: String(s.minio.concurrency),
+    },
     smtp: { ...s.smtp, port: String(s.smtp.port) },
     notify_on_new_work: s.notify_on_new_work,
     notify_on_failure: s.notify_on_failure,
@@ -179,6 +190,47 @@ export function SettingsPage() {
       notify_on_new_work: form.notify_on_new_work,
       notify_on_failure: form.notify_on_failure,
     });
+  };
+
+  // ---------- MinIO ----------
+  const minioStatusQ = useQuery({
+    queryKey: ["minioStatus"],
+    queryFn: () => minioStatus(),
+    refetchInterval: 15000,
+  });
+  const saveMinioMut = useMutation({
+    mutationFn: (patch: SettingsPatch) => patchSettings(patch),
+    onSuccess: () => toast.success("MinIO 配置已保存"),
+    onError: (e) => toast.error("MinIO 保存失败", { description: e.message }),
+  });
+  const testMinioMut = useMutation({
+    mutationFn: testMinio,
+    onSuccess: (r) =>
+      r.ok ? toast.success("MinIO 连接成功") : toast.error("MinIO 连接失败", { description: r.error }),
+    onError: (e) => toast.error("MinIO 连接失败", { description: e.message }),
+  });
+  const saveMinio = () => {
+    if (!form) return;
+    const concurrency = toInt(form.minio.concurrency, 1, 8);
+    if (concurrency === null) {
+      toast.error("MinIO 并发不合法", { description: "并发需为 1 ~ 8 的整数" });
+      return;
+    }
+    if (form.minio.enabled && !form.minio.endpoint.trim()) {
+      toast.error("Endpoint 不能为空", { description: "启用 MinIO 时必须填写 endpoint(host:port)" });
+      return;
+    }
+    const minio: Partial<MinioSettings> = {
+      enabled: form.minio.enabled,
+      endpoint: form.minio.endpoint.trim(),
+      bucket: form.minio.bucket.trim(),
+      access_key: form.minio.access_key.trim(),
+      use_ssl: form.minio.use_ssl,
+      prefix: form.minio.prefix,
+      concurrency,
+    };
+    if (form.minio.password) minio.secret_key = form.minio.password;
+    saveMinioMut.mutate({ minio });
   };
 
   return (
@@ -409,6 +461,96 @@ export function SettingsPage() {
           </Button>
           <Button variant="outline" disabled={testMailMut.isPending} onClick={() => testMailMut.mutate()}>
             <MailCheck className="size-4" /> {testMailMut.isPending ? "发送中…" : "发送测试邮件"}
+          </Button>
+        </CardFooter>
+      </Card>
+
+      {/* 对象存储(MinIO) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">对象存储(MinIO)</CardTitle>
+          <CardDescription>下载完成的文件自动同步到 MinIO;本地文件不受影响</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <SwitchRow
+            id="set-minio-enabled"
+            label="启用 MinIO 同步"
+            description="开启后新完成的下载将上传到 MinIO"
+            checked={form.minio.enabled}
+            onChange={(enabled) => update({ minio: { ...form.minio, enabled } })}
+          />
+          <div className="grid gap-4 md:grid-cols-2">
+            <Field label="Endpoint" htmlFor="set-minio-endpoint" hint="host:port,不含 scheme">
+              <Input
+                id="set-minio-endpoint"
+                placeholder="127.0.0.1:9000"
+                value={form.minio.endpoint}
+                onChange={(e) => update({ minio: { ...form.minio, endpoint: e.target.value } })}
+              />
+            </Field>
+            <Field label="Bucket" htmlFor="set-minio-bucket" hint="需已存在(不会自动创建)">
+              <Input
+                id="set-minio-bucket"
+                placeholder="douyin"
+                value={form.minio.bucket}
+                onChange={(e) => update({ minio: { ...form.minio, bucket: e.target.value } })}
+              />
+            </Field>
+            <Field label="Access Key" htmlFor="set-minio-ak">
+              <Input
+                id="set-minio-ak"
+                autoComplete="off"
+                value={form.minio.access_key}
+                onChange={(e) => update({ minio: { ...form.minio, access_key: e.target.value } })}
+              />
+            </Field>
+            <Field label="Secret Key" htmlFor="set-minio-sk" hint="已配置时保持原样表示不修改">
+              <Input
+                id="set-minio-sk"
+                type="password"
+                autoComplete="new-password"
+                value={form.minio.password}
+                onChange={(e) => update({ minio: { ...form.minio, password: e.target.value } })}
+              />
+            </Field>
+            <Field label="对象前缀" htmlFor="set-minio-prefix" hint="对象键前缀,自动补尾斜杠">
+              <Input
+                id="set-minio-prefix"
+                placeholder="douyin/"
+                value={form.minio.prefix}
+                onChange={(e) => update({ minio: { ...form.minio, prefix: e.target.value } })}
+              />
+            </Field>
+            <Field label="上传并发" htmlFor="set-minio-conc" hint="1 ~ 8">
+              <Input
+                id="set-minio-conc"
+                inputMode="numeric"
+                value={form.minio.concurrency}
+                onChange={(e) => update({ minio: { ...form.minio, concurrency: e.target.value } })}
+              />
+            </Field>
+          </div>
+          <SwitchRow
+            id="set-minio-ssl"
+            label="使用 HTTPS"
+            description="按 endpoint 是否为 TLS 服务勾选"
+            checked={form.minio.use_ssl}
+            onChange={(use_ssl) => update({ minio: { ...form.minio, use_ssl } })}
+          />
+          {minioStatusQ.data ? (
+            <p className="text-xs text-muted-foreground">
+              同步状态:队列 {minioStatusQ.data.queued} · 已上传 {minioStatusQ.data.uploaded_total} · 失败{" "}
+              {minioStatusQ.data.failed_total} · 丢弃 {minioStatusQ.data.dropped_total}
+              {minioStatusQ.data.last_error ? ` · 最近错误:${minioStatusQ.data.last_error}` : ""}
+            </p>
+          ) : null}
+        </CardContent>
+        <CardFooter className="gap-2">
+          <Button onClick={saveMinio} disabled={saveMinioMut.isPending}>
+            <Save className="size-4" /> {saveMinioMut.isPending ? "保存中…" : "保存"}
+          </Button>
+          <Button variant="outline" disabled={testMinioMut.isPending} onClick={() => testMinioMut.mutate()}>
+            <MailCheck className="size-4" /> {testMinioMut.isPending ? "测试中…" : "测试连接"}
           </Button>
         </CardFooter>
       </Card>

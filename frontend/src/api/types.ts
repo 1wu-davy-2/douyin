@@ -342,6 +342,27 @@ export interface SmtpConfig {
   to: string;
 }
 
+export interface MinioSettings {
+  enabled: boolean;
+  endpoint: string;
+  bucket: string;
+  access_key: string;
+  /** 只写:回显仅 secret_set 布尔 */
+  secret_key: string;
+  secret_set: boolean;
+  use_ssl: boolean;
+  prefix: string;
+  concurrency: number;
+}
+
+export interface MinioStatus {
+  queued: number;
+  uploaded_total: number;
+  failed_total: number;
+  dropped_total: number;
+  last_error: string | null;
+}
+
 export interface Settings {
   provider_mode: "auto" | "sidecar" | "mock";
   cookie: string;
@@ -355,6 +376,7 @@ export interface Settings {
   incremental_stop_pages: number;
   completeness_gap_threshold: number;
   sidecar_idle_timeout_minutes: number;
+  minio: MinioSettings;
   smtp: SmtpConfig;
   notify_on_new_work: boolean;
   notify_on_failure: boolean;
@@ -373,6 +395,7 @@ export interface SettingsPatch {
   incremental_stop_pages?: number;
   completeness_gap_threshold?: number;
   sidecar_idle_timeout_minutes?: number;
+  minio?: Partial<MinioSettings>;
   smtp?: Partial<SmtpConfig>;
   notify_on_new_work?: boolean;
   notify_on_failure?: boolean;

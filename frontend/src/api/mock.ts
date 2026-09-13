@@ -28,6 +28,7 @@ import type {
   Work,
   WorkDetail,
   WorkType,
+  MinioSettings,
 } from "./types";
 import { JOB_STATUSES } from "./types";
 
@@ -187,6 +188,7 @@ interface MockSettings {
   incremental_stop_pages: number;
   completeness_gap_threshold: number;
   sidecar_idle_timeout_minutes: number;
+  minio: MinioSettings;
   smtp: Settings["smtp"];
   notify_on_new_work: boolean;
   notify_on_failure: boolean;
@@ -316,6 +318,7 @@ const state: MockState = {
     incremental_stop_pages: 2,
     completeness_gap_threshold: 10,
     sidecar_idle_timeout_minutes: 10,
+    minio: { enabled: false, endpoint: "", bucket: "", access_key: "", secret_key: "", secret_set: false, use_ssl: false, prefix: "douyin/", concurrency: 2 },
     smtp: { host: "", port: 465, username: "", password: "", from: "", to: "" },
     notify_on_new_work: true,
     notify_on_failure: true,
@@ -843,6 +846,7 @@ function settingsJson(): Settings {
   return {
     ...s,
     cookie: mask(s.cookie),
+    minio: { ...s.minio, secret_key: s.minio.secret_key ? mask(s.minio.secret_key) : "", secret_set: Boolean(s.minio.secret_key) },
     smtp: { ...s.smtp, password: mask(s.smtp.password) },
   };
 }
@@ -1659,6 +1663,14 @@ export function mockRoute(req: MockRequest): MockResponse {
       if (b.sidecar_idle_timeout_minutes !== undefined) s.sidecar_idle_timeout_minutes = Math.max(1, num(b.sidecar_idle_timeout_minutes, s.sidecar_idle_timeout_minutes));
       if (b.notify_on_new_work !== undefined) s.notify_on_new_work = bool(b.notify_on_new_work, s.notify_on_new_work);
       if (b.notify_on_failure !== undefined) s.notify_on_failure = bool(b.notify_on_failure, s.notify_on_failure);
+      if (b.minio !== undefined && b.minio !== null && typeof b.minio === "object") {
+        const m = b.minio as Record<string, unknown>;
+        s.minio = {
+          ...s.minio, ...m,
+          secret_key:
+            m.secret_key !== undefined && m.secret_key !== "" ? String(m.secret_key) : s.minio.secret_key,
+        };
+      }
       if (b.smtp && typeof b.smtp === "object") {
         const smtp = asRecord(b.smtp);
         if (smtp.host !== undefined) s.smtp.host = str(smtp.host, s.smtp.host);
