@@ -2,20 +2,23 @@
  * 监控订阅页:
  * 表格(目标/类型/间隔/自动下载/画质/上次运行/监控期间统计/启用 Switch)+ 新建 Dialog + 删除 confirm-dialog。
  * 启用开关走乐观更新(PATCH /api/subscriptions/{id})。
+ * 新建订阅(契约 v1.4):博主模式为多选(带头像 + 搜索,逐个创建);合集模式保持单选。
+ * 博主名统一显示 alias ?? 昵称(与作品库一致)。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Radar, Trash2 } from "lucide-react";
+import { Radar, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { createSubscription, deleteSubscription, updateSubscription } from "../api/endpoints";
 import { qk, useCollections, useCreators, useSubscriptions } from "../api/queries";
-import type { Quality, Subscription, TargetType } from "../api/types";
+import type { Creator, Quality, Subscription, TargetType } from "../api/types";
 import { QUALITIES } from "../api/types";
 import { ConfirmDialog } from "../components/confirm-dialog";
 import { EmptyState } from "../components/empty-state";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
+import { Checkbox } from "../components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -30,13 +33,31 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Skeleton } from "../components/ui/skeleton";
 import { Switch } from "../components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
+import { cn } from "../lib/utils";
 import { formatDateTime } from "../lib/format";
+
+/** 博主显示名:alias ?? nickname(与作品库一致)。 */
+function creatorDisplayName(c: Creator): string {
+  return c.alias ?? c.nickname;
+}
 
 export function SubscriptionsPage() {
   const queryClient = useQueryClient();
   const subscriptions = useSubscriptions();
+  const creators = useCreators();
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Subscription | null>(null);
+
+  // 表格里把订阅的博主名统一解析为 alias ?? 昵称
+  const creatorById = useMemo(() => {
+    const map = new Map<number, Creator>();
+    for (const c of creators.data ?? []) map.set(c.id, c);
+    return map;
+  }, [creators.data]);
+  const creatorNameOf = (sub: Subscription): string => {
+    const c = creatorById.get(sub.creator_id);
+    return c ? creatorDisplayName(c) : sub.target_name || sub.creator_nickname;
+  };
 
   const enableMut = useMutation({
     mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) => updateSubscription(id, { enabled }),
@@ -135,8 +156,10 @@ export function SubscriptionsPage() {
               subs.map((sub) => (
                 <TableRow key={sub.id}>
                   <TableCell>
-                    <p className="max-w-56 truncate font-medium" title={sub.target_name}>{sub.target_name}</p>
-                    <p className="text-xs text-muted-foreground">博主:{sub.creator_nickname}</p>
+                    <p className="max-w-56 truncate font-medium" title={creatorNameOf(sub)}>{creatorNameOf(sub)}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {sub.target_type === "collection" ? `博主:${creatorNameOf(sub)}` : "整主页"}
+                    </p>
                   </TableCell>
                   <TableCell>
                     <Badge variant={sub.target_type === "creator" ? "outline" : "secondary"}>
@@ -156,7 +179,7 @@ export function SubscriptionsPage() {
                   </TableCell>
                   <TableCell>
                     <Switch
-                      aria-label={`启用 ${sub.target_name}`}
+                      aria-label={`启用 ${creatorNameOf(sub)}`}
                       checked={sub.enabled}
                       disabled={enableMut.isPending}
                       onCheckedChange={(enabled) => enableMut.mutate({ id: sub.id, enabled })}
@@ -185,7 +208,7 @@ export function SubscriptionsPage() {
         open={deleteTarget !== null}
         onOpenChange={(open) => (open ? undefined : setDeleteTarget(null))}
         title="删除订阅"
-        description={`将删除对「${deleteTarget?.target_name ?? ""}」的监控订阅,已下载文件不受影响。`}
+        description={`将删除对「${deleteTarget ? creatorNameOf(deleteTarget) : ""}」的监控订阅,已下载文件不受影响。`}
         confirmLabel="删除"
         destructive
         loading={deleteMut.isPending}
@@ -199,6 +222,9 @@ export function SubscriptionsPage() {
 
 interface CreateFormState {
   targetType: TargetType;
+  /** 博主模式:多选的博主 id 列表(每位各建一条订阅)。 */
+  creatorIds: number[];
+  /** 合集模式:单选所属博主。 */
   creatorId: string;
   collectionId: string;
   intervalMinutes: string;
@@ -208,9 +234,10 @@ interface CreateFormState {
 
 const INITIAL_FORM: CreateFormState = {
   targetType: "creator",
+  creatorIds: [],
   creatorId: "",
   collectionId: "",
-  intervalMinutes: "20",
+  intervalMinutes: "60",
   autoDownload: true,
   quality: "1080p",
 };
@@ -220,30 +247,58 @@ function CreateSubscriptionDialog({ open, onOpenChange }: { open: boolean; onOpe
   const creators = useCreators();
   const [form, setForm] = useState<CreateFormState>(INITIAL_FORM);
   const [error, setError] = useState<string | null>(null);
+  const [creatorSearch, setCreatorSearch] = useState("");
 
   // 打开时重置表单
   useEffect(() => {
     if (open) {
       setForm(INITIAL_FORM);
       setError(null);
+      setCreatorSearch("");
     }
   }, [open]);
 
   const creatorIdNum = Number(form.creatorId) || 0;
   const collections = useCollections(form.targetType === "collection" && creatorIdNum > 0 ? creatorIdNum : null);
 
+  // 多选列表:按 别名/昵称 过滤
+  const creatorItems = useMemo(() => {
+    const kw = creatorSearch.trim().toLowerCase();
+    return (creators.data ?? []).filter(
+      (c) =>
+        kw === "" ||
+        c.nickname.toLowerCase().includes(kw) ||
+        (c.alias ?? "").toLowerCase().includes(kw),
+    );
+  }, [creators.data, creatorSearch]);
+
   const createMut = useMutation({
-    mutationFn: () =>
-      createSubscription({
-        target_type: form.targetType,
-        creator_id: creatorIdNum,
-        ...(form.targetType === "collection" ? { collection_id: Number(form.collectionId) } : {}),
-        interval_minutes: Number(form.intervalMinutes),
-        auto_download: form.autoDownload,
-        quality: form.quality,
-      }),
-    onSuccess: (sub) => {
-      toast.success("订阅已创建", { description: `将每 ${sub.interval_minutes} 分钟检查「${sub.target_name}」` });
+    mutationFn: async (ids: number[]) => {
+      // 多选博主:每位各创建一条订阅;单条失败不影响其他
+      return Promise.allSettled(
+        ids.map((id) =>
+          createSubscription({
+            target_type: form.targetType,
+            creator_id: id,
+            ...(form.targetType === "collection" ? { collection_id: Number(form.collectionId) } : {}),
+            interval_minutes: Number(form.intervalMinutes),
+            auto_download: form.autoDownload,
+            quality: form.quality,
+          }),
+        ),
+      );
+    },
+    onSuccess: (results) => {
+      const okCount = results.filter((r) => r.status === "fulfilled").length;
+      const failCount = results.length - okCount;
+      if (failCount === 0) {
+        toast.success(`已创建 ${okCount} 条订阅`, { description: `每 ${form.intervalMinutes} 分钟检查一次` });
+      } else {
+        const firstError = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+        toast.warning(`已创建 ${okCount} 条订阅,${failCount} 条失败`, {
+          description: firstError?.reason instanceof Error ? firstError.reason.message : undefined,
+        });
+      }
       onOpenChange(false);
       queryClient.invalidateQueries({ queryKey: qk.subscriptions });
     },
@@ -253,30 +308,47 @@ function CreateSubscriptionDialog({ open, onOpenChange }: { open: boolean; onOpe
     },
   });
 
+  const toggleCreator = (id: number) => {
+    setForm((f) => ({
+      ...f,
+      creatorIds: f.creatorIds.includes(id) ? f.creatorIds.filter((x) => x !== id) : [...f.creatorIds, id],
+    }));
+  };
+
   const handleSubmit = () => {
     setError(null);
-    if (!creatorIdNum) {
-      setError("请选择博主");
-      return;
-    }
-    if (form.targetType === "collection" && !form.collectionId) {
-      setError("请选择合集");
-      return;
-    }
     const interval = Number(form.intervalMinutes);
     if (!Number.isInteger(interval) || interval < 1 || interval > 10080) {
       setError("间隔需为 1 ~ 10080 之间的整数分钟");
       return;
     }
-    createMut.mutate();
+    if (form.targetType === "creator") {
+      if (form.creatorIds.length === 0) {
+        setError("请至少勾选一位博主");
+        return;
+      }
+      createMut.mutate(form.creatorIds);
+      return;
+    }
+    if (!creatorIdNum) {
+      setError("请选择博主");
+      return;
+    }
+    if (!form.collectionId) {
+      setError("请选择合集");
+      return;
+    }
+    createMut.mutate([creatorIdNum]);
   };
+
+  const pending = createMut.isPending;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>新建订阅</DialogTitle>
-          <DialogDescription>按设定间隔自动扫描目标,新作品可自动下载</DialogDescription>
+          <DialogDescription>按设定间隔自动扫描目标,新作品可自动下载;博主可多选批量创建</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -296,24 +368,72 @@ function CreateSubscriptionDialog({ open, onOpenChange }: { open: boolean; onOpe
             </Select>
           </div>
 
-          <div className="space-y-1.5">
-            <Label>博主</Label>
-            <Select
-              value={form.creatorId}
-              onValueChange={(v) => setForm((f) => ({ ...f, creatorId: v, collectionId: "" }))}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="选择博主" />
-              </SelectTrigger>
-              <SelectContent>
-                {(creators.data ?? []).map((c) => (
-                  <SelectItem key={c.id} value={String(c.id)}>
-                    {c.nickname}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {form.targetType === "creator" ? (
+            <div className="space-y-1.5">
+              <Label>博主(可多选,已选 {form.creatorIds.length} 位)</Label>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={creatorSearch}
+                  onChange={(e) => setCreatorSearch(e.target.value)}
+                  placeholder="搜索别名 / 昵称"
+                  className="h-8 pl-8"
+                  aria-label="搜索博主"
+                />
+              </div>
+              <div className="max-h-56 space-y-0.5 overflow-y-auto rounded-lg border border-border p-1">
+                {creators.isPending ? (
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground">加载中…</div>
+                ) : creatorItems.length === 0 ? (
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                    {(creators.data ?? []).length === 0 ? "还没有博主,请先在作品库添加" : "没有匹配的博主"}
+                  </div>
+                ) : (
+                  creatorItems.map((c) => {
+                    const checked = form.creatorIds.includes(c.id);
+                    return (
+                      <label
+                        key={c.id}
+                        className={cn(
+                          "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-accent/60",
+                          checked && "bg-accent/80",
+                        )}
+                      >
+                        <Checkbox checked={checked} onCheckedChange={() => toggleCreator(c.id)} />
+                        <img src={c.avatar_url} alt="" className="size-7 shrink-0 rounded-full object-cover" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm">{creatorDisplayName(c)}</span>
+                          {c.alias ? (
+                            <span className="block truncate text-[11px] text-muted-foreground">昵称:{c.nickname}</span>
+                          ) : null}
+                        </span>
+                        <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{c.works_count} 作品</span>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <Label>博主</Label>
+              <Select
+                value={form.creatorId}
+                onValueChange={(v) => setForm((f) => ({ ...f, creatorId: v, collectionId: "" }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="选择博主" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(creators.data ?? []).map((c) => (
+                    <SelectItem key={c.id} value={String(c.id)}>
+                      {creatorDisplayName(c)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           {form.targetType === "collection" ? (
             <div className="space-y-1.5">
@@ -380,11 +500,15 @@ function CreateSubscriptionDialog({ open, onOpenChange }: { open: boolean; onOpe
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={createMut.isPending}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
             取消
           </Button>
-          <Button onClick={handleSubmit} disabled={createMut.isPending}>
-            {createMut.isPending ? "创建中…" : "创建订阅"}
+          <Button onClick={handleSubmit} disabled={pending}>
+            {pending
+              ? "创建中…"
+              : form.targetType === "creator" && form.creatorIds.length > 1
+                ? `创建 ${form.creatorIds.length} 条订阅`
+                : "创建订阅"}
           </Button>
         </DialogFooter>
       </DialogContent>

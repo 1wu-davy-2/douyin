@@ -1,18 +1,52 @@
 /**
  * 作品库页(核心):
- * 左列:博主卡片(头像/昵称/作品数/已下载数/下载空间),SSE scan.progress 驱动扫描进度条;
- *       "添加博主"输入框 → POST /api/creators(202)→ scan-store 记录 → scan.done 刷新并 toast。
- * 右列:选中博主详情,Tabs(作品/合集)。
+ * 左列:添加博主"+"弹引导弹窗(别名/分组/独立下载根/监控参数,契约 v1.4/1.4b);
+ *       博主按分组树形展示(组头可折叠,localStorage 记忆;未分组平铺排最后);
+ *       博主卡片显示 别名 ?? 昵称(alias 存在时次要文字显示原昵称),SSE scan.progress 驱动扫描进度条。
+ * 右列:选中博主详情(标题行显示别名 + ✏️ 重命名/分组弹窗),Tabs(作品/合集)。
+ * 作品筛选:合集多选排除(契约 v1.4b),"按筛选全选"同步传 exclude_collection_ids。
  */
 import { useEffect, useMemo, useState, useSyncExternalStore, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Library as LibraryIcon, Pencil, Plus, RotateCcw } from "lucide-react";
+import {
+  BellOff,
+  BellRing,
+  ChevronDown,
+  ChevronRight,
+  Library as LibraryIcon,
+  Pencil,
+  Plus,
+  RotateCcw,
+} from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "../api/client";
-import { createCreator, moveCreatorDownloads, rescanCreator, setCreatorDownloadRoot, batchDeleteWorks, worksRedownload } from "../api/endpoints";
+import {
+  batchDeleteWorks,
+  batchWorkIds,
+  createCreator,
+  createDownloads,
+  createSubscription,
+  deleteSubscription,
+  moveCreatorDownloads,
+  patchCreator,
+  rescanCreator,
+  setCreatorDownloadRoot,
+  updateSubscription,
+  worksRedownload,
+} from "../api/endpoints";
+import { qk, useCollections, useCreators, useSettings, useSubscriptions, useWorks } from "../api/queries";
+import type {
+  CreateCreatorInput,
+  Creator,
+  MoveDownloadsResult,
+  Quality,
+  Subscription,
+  WorkDlFilter,
+  WorkSort,
+  WorkTypeFilter,
+} from "../api/types";
+import { QUALITIES } from "../api/types";
 import { ConfirmDialog } from "../components/confirm-dialog";
-import { qk, useCollections, useCreators, useSettings, useWorks } from "../api/queries";
-import type { Creator, MoveDownloadsResult, Quality, WorkDlFilter, WorkSort, WorkTypeFilter} from "../api/types";
 import { EmptyState } from "../components/empty-state";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -28,18 +62,65 @@ import {
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Progress } from "../components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
+import { Switch } from "../components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { useDebouncedValue } from "../lib/use-debounced-value";
 import { getScanSnapshot, subscribeScans, type LiveScan } from "../lib/scan-store";
 import { formatBytes, truncateMiddle } from "../lib/format";
 import { openPlayer } from "../lib/player-store";
-import { batchWorkIds, createDownloads } from "../api/endpoints";
 import { cn, isAbsolutePath, removeFromSet, toggleInSet, unionIntoSet } from "../lib/utils";
 import { CollectionsPanel } from "./library/collections-panel";
 import { WorksPanel } from "./library/works-panel";
 
 type TabKey = "works" | "collections";
+
+// ---------------------------------------------------------------- 分组树 --
+
+/** 左列折叠状态存 localStorage(仅展示层,不影响选中)。 */
+const GROUPS_COLLAPSED_KEY = "douyin.creatorGroups.collapsed";
+
+function loadCollapsedGroups(): Set<string> {
+  try {
+    const raw = localStorage.getItem(GROUPS_COLLAPSED_KEY);
+    if (!raw) return new Set();
+    const parsed: unknown = JSON.parse(raw);
+    return new Set(
+      Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+interface CreatorGroup {
+  name: string;
+  creators: Creator[];
+}
+
+/** 按 group 分组;组内保持接口顺序(created_at desc),组名按中文排序;未分组单独返回。 */
+function buildCreatorGroups(list: Creator[]): { groups: CreatorGroup[]; ungrouped: Creator[] } {
+  const map = new Map<string, Creator[]>();
+  const ungrouped: Creator[] = [];
+  for (const c of list) {
+    if (c.group) {
+      const arr = map.get(c.group) ?? [];
+      arr.push(c);
+      map.set(c.group, arr);
+    } else {
+      ungrouped.push(c);
+    }
+  }
+  const groups = [...map.entries()]
+    .map(([name, creators]) => ({ name, creators }))
+    .sort((a, b) => a.name.localeCompare(b.name, "zh-Hans-CN"));
+  return { groups, ungrouped };
+}
+
+function creatorDisplayName(c: Creator): string {
+  return c.alias ?? c.nickname;
+}
 
 export function LibraryPage() {
   const queryClient = useQueryClient();
@@ -53,7 +134,12 @@ export function LibraryPage() {
   const [tab, setTab] = useState<TabKey>("works");
   const [qInput, setQInput] = useState("");
   const q = useDebouncedValue(qInput, 300);
-  const [collectionId, setCollectionId] = useState<number | null | "none">(null);
+  /** 契约 v1.4b:多选排除的合集 id;与单合集聚焦互斥(聚焦时置空)。 */
+  const [excludeIds, setExcludeIds] = useState<number[]>([]);
+  /** 单发作品开关(契约 v1.2:collection_id=none)。 */
+  const [singlesOnly, setSinglesOnly] = useState(false);
+  /** 单合集聚焦(合集面板"查看作品"入口)。 */
+  const [collectionId, setCollectionId] = useState<number | null>(null);
   const [workType, setWorkType] = useState<WorkTypeFilter | null>(null);
   const [dlStatus, setDlStatus] = useState<WorkDlFilter | null>(null);
   const [sort, setSort] = useState<WorkSort>("published_at_desc");
@@ -64,8 +150,9 @@ export function LibraryPage() {
     page_size: pageSize,
     sort,
     q: q || undefined,
-    collection_id: collectionId === "none" ? undefined : collectionId ?? undefined,
-    collection_none: collectionId === "none" || undefined,
+    collection_none: singlesOnly || undefined,
+    collection_id: collectionId ?? undefined,
+    exclude_collection_ids: excludeIds.length > 0 ? excludeIds : undefined,
     type: workType ?? undefined,
     dl: dlStatus ?? undefined,
   });
@@ -80,6 +167,39 @@ export function LibraryPage() {
   const selectedCreator = creatorList.find((c) => c.id === selectedCreatorId) ?? null;
   const scans = useSyncExternalStore(subscribeScans, getScanSnapshot, getScanSnapshot);
 
+  // 监控状态(契约:creator 级订阅;一个博主可能多条,启用中的优先展示)
+  const subscriptions = useSubscriptions();
+  const subByCreator = useMemo(() => {
+    const map = new Map<number, Subscription>();
+    for (const s of subscriptions.data ?? []) {
+      if (s.target_type !== "creator") continue;
+      const cur = map.get(s.creator_id);
+      if (!cur || (!cur.enabled && s.enabled)) map.set(s.creator_id, s);
+    }
+    return map;
+  }, [subscriptions.data]);
+
+  // 分组树(无分组时保持平铺;有分组时未分组排最后)
+  const grouped = useMemo(() => buildCreatorGroups(creatorList), [creatorList]);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsedGroups);
+  const toggleGroupCollapsed = (name: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      try {
+        localStorage.setItem(GROUPS_COLLAPSED_KEY, JSON.stringify([...next]));
+      } catch {
+        /* localStorage 不可用时静默(仅影响记忆) */
+      }
+      return next;
+    });
+  };
+  const groupSuggestions = useMemo(
+    () => [...new Set(creatorList.map((c) => c.group).filter((g): g is string => Boolean(g)))].sort((a, b) => a.localeCompare(b, "zh-Hans-CN")),
+    [creatorList],
+  );
+
   // 默认选中第一个博主;博主被删除后回落
   useEffect(() => {
     if (creatorList.length === 0) return;
@@ -91,6 +211,8 @@ export function LibraryPage() {
   // 切换博主:清空筛选与选择
   useEffect(() => {
     setQInput("");
+    setExcludeIds([]);
+    setSinglesOnly(false);
     setCollectionId(null);
     setWorkType(null);
     setDlStatus(null);
@@ -101,7 +223,7 @@ export function LibraryPage() {
   // 筛选条件变化回到第 1 页
   useEffect(() => {
     setPage(1);
-  }, [q, collectionId, workType, dlStatus, sort, pageSize]);
+  }, [q, singlesOnly, excludeIds, collectionId, workType, dlStatus, sort, pageSize]);
 
   // 总数变少时收拢页码
   useEffect(() => {
@@ -116,11 +238,14 @@ export function LibraryPage() {
 
   // ---------- 操作 ----------
   const [profileUrl, setProfileUrl] = useState("");
+  /** 点击"+"后先弹引导弹窗,确认才 POST(契约 v1.4/1.4b)。 */
+  const [wizardOpen, setWizardOpen] = useState(false);
   const addCreatorMut = useMutation({
-    mutationFn: () => createCreator(profileUrl.trim()),
+    mutationFn: (input: CreateCreatorInput) => createCreator(input),
     onSuccess: (res) => {
       toast.success("博主已加入,开始扫描作品");
       setProfileUrl("");
+      setWizardOpen(false);
       setSelectedCreatorId(res.creator_id);
       void queryClient.invalidateQueries({ queryKey: qk.creators });
     },
@@ -131,8 +256,9 @@ export function LibraryPage() {
     mutationFn: () =>
       batchWorkIds(selectedCreatorId as number, {
         q: q || undefined,
-        collection_id: collectionId === "none" ? undefined : collectionId ?? undefined,
-        collection_none: collectionId === "none" || undefined,
+        collection_none: singlesOnly || undefined,
+        collection_id: collectionId ?? undefined,
+        exclude_collection_ids: excludeIds.length > 0 ? excludeIds : undefined,
         type: workType ?? undefined,
         dl: dlStatus ?? undefined,
       }),
@@ -209,10 +335,16 @@ export function LibraryPage() {
     onError: (e) => toast.error("删除失败", { description: e.message }),
   });
 
+  // ---------- 重命名/分组 ----------
+  const [renameOpen, setRenameOpen] = useState(false);
+  /** 详情标题行"监控"快捷入口(添加/管理该博主的 creator 级订阅)。 */
+  const [monitorOpen, setMonitorOpen] = useState(false);
+  const selectedCreatorSub = selectedCreator ? subByCreator.get(selectedCreator.id) ?? null : null;
+
   // ---------- 渲染 ----------
   return (
     <div className="flex gap-4 p-4">
-      {/* 左列:添加博主 + 博主卡片 */}
+      {/* 左列:添加博主 + 博主分组树 */}
       <aside className="w-72 shrink-0 space-y-3 self-start lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto">
         <form
           className="flex gap-2"
@@ -222,7 +354,7 @@ export function LibraryPage() {
               toast.error("请输入博主主页链接或 sec_uid");
               return;
             }
-            addCreatorMut.mutate();
+            setWizardOpen(true);
           }}
         >
           <Input
@@ -254,18 +386,71 @@ export function LibraryPage() {
             title="还没有博主"
             description="在上方粘贴抖音主页链接或 sec_uid,添加第一个博主"
           />
-        ) : (
+        ) : grouped.groups.length === 0 ? (
+          /* 无分组:保持平铺现状 */
           creatorList.map((c) => (
             <CreatorCard
               key={c.id}
               creator={c}
               active={c.id === selectedCreatorId}
               live={scans.byCreator.get(c.id)}
+              monitor={subByCreator.get(c.id)}
               onClick={() => setSelectedCreatorId(c.id)}
               onRescan={() => rescanMut.mutate(c.id)}
               rescanPending={rescanMut.isPending && rescanMut.variables === c.id}
             />
           ))
+        ) : (
+          <>
+            {/* 有分组:组头可折叠(状态存 localStorage),组内排序不变;未分组平铺排最后 */}
+            {grouped.groups.map((g) => {
+              const collapsed = collapsedGroups.has(g.name);
+              return (
+                <div key={g.name} className="space-y-2">
+                  <button
+                    type="button"
+                    aria-expanded={!collapsed}
+                    onClick={() => toggleGroupCollapsed(g.name)}
+                    className="flex w-full items-center gap-1 rounded-lg px-1 py-0.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                    title={collapsed ? "展开分组" : "折叠分组"}
+                  >
+                    {collapsed ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+                    <span className="truncate font-medium text-foreground/80">{g.name}</span>
+                    <span className="tabular-nums">({g.creators.length})</span>
+                  </button>
+                  {!collapsed &&
+                    g.creators.map((c) => (
+                      <CreatorCard
+                        key={c.id}
+                        creator={c}
+                        active={c.id === selectedCreatorId}
+                        live={scans.byCreator.get(c.id)}
+                        monitor={subByCreator.get(c.id)}
+                        onClick={() => setSelectedCreatorId(c.id)}
+                        onRescan={() => rescanMut.mutate(c.id)}
+                        rescanPending={rescanMut.isPending && rescanMut.variables === c.id}
+                      />
+                    ))}
+                </div>
+              );
+            })}
+            {grouped.ungrouped.length > 0 ? (
+              <div className="space-y-2 border-t border-border pt-2">
+                {grouped.ungrouped.map((c) => (
+                  <CreatorCard
+                    key={c.id}
+                    creator={c}
+                    active={c.id === selectedCreatorId}
+                    live={scans.byCreator.get(c.id)}
+                    monitor={subByCreator.get(c.id)}
+                    onClick={() => setSelectedCreatorId(c.id)}
+                    onRescan={() => rescanMut.mutate(c.id)}
+                    rescanPending={rescanMut.isPending && rescanMut.variables === c.id}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </>
         )}
       </aside>
 
@@ -276,7 +461,54 @@ export function LibraryPage() {
             <div className="flex items-center gap-3">
               <img src={selectedCreator.avatar_url} alt="" className="size-11 rounded-full object-cover" />
               <div className="min-w-0">
-                <h1 className="truncate text-base font-semibold">{selectedCreator.nickname}</h1>
+                <div className="flex items-center gap-1.5">
+                  <h1 className="truncate text-base font-semibold" title={creatorDisplayName(selectedCreator)}>
+                    {creatorDisplayName(selectedCreator)}
+                  </h1>
+                  {selectedCreator.alias ? (
+                    <span className="shrink-0 text-xs text-muted-foreground" title={`原昵称:${selectedCreator.nickname}`}>
+                      原昵称:{selectedCreator.nickname}
+                    </span>
+                  ) : null}
+                  {selectedCreator.group ? (
+                    <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[10px] leading-4">
+                      {selectedCreator.group}
+                    </Badge>
+                  ) : null}
+                  {selectedCreatorSub ? (
+                    selectedCreatorSub.enabled ? (
+                      <Badge variant="info" className="shrink-0 gap-0.5 px-1.5 py-0 text-[10px] leading-4" title={`监控中 · 每 ${selectedCreatorSub.interval_minutes} 分钟检查一次`}>
+                        <BellRing className="size-2.5" /> 监控中
+                      </Badge>
+                    ) : (
+                      <Badge variant="muted" className="shrink-0 px-1.5 py-0 text-[10px] leading-4" title="订阅存在但已暂停">
+                        已暂停
+                      </Badge>
+                    )
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-6 shrink-0 text-muted-foreground hover:text-foreground"
+                    title="重命名 / 分组"
+                    aria-label="重命名 / 分组"
+                    onClick={() => setRenameOpen(true)}
+                  >
+                    <Pencil className="size-3.5" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 shrink-0 gap-1 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                    title={selectedCreatorSub ? "管理监控(间隔/画质/自动下载)" : "为该博主添加监控订阅"}
+                    onClick={() => setMonitorOpen(true)}
+                  >
+                    <BellRing className="size-3" />
+                    {selectedCreatorSub ? "监控中" : "添加监控"}
+                  </Button>
+                </div>
                 <p className="text-xs text-muted-foreground">
                   已收录 {selectedCreator.works_count} / 主页 {selectedCreator.reported_work_count} 个作品 · 已下载{" "}
                   {selectedCreator.downloaded_count} · 下载空间 {formatBytes(selectedCreator.download_bytes)}
@@ -302,8 +534,20 @@ export function LibraryPage() {
                 collections={collections.data ?? []}
                 q={qInput}
                 onQChange={setQInput}
+                excludeIds={excludeIds}
+                onToggleExclude={(id) => {
+                  setExcludeIds((prev) =>
+                    prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+                  );
+                  setCollectionId(null); // 排除与单合集聚焦互斥
+                }}
+                singlesOnly={singlesOnly}
+                onSinglesOnlyChange={(v) => {
+                  setSinglesOnly(v);
+                  if (v) setCollectionId(null);
+                }}
                 collectionId={collectionId}
-                onCollectionChange={setCollectionId}
+                onCollectionFocusChange={setCollectionId}
                 type={workType}
                 onTypeChange={setWorkType}
                 dl={dlStatus}
@@ -338,7 +582,7 @@ export function LibraryPage() {
                 onPlay={(index) => {
                   const playable = pageItems
                     .filter((w) => w.dl_status === "succeeded")
-                    .map((w) => ({ workId: w.id, title: w.title, creatorName: selectedCreator.nickname }));
+                    .map((w) => ({ workId: w.id, title: w.title, creatorName: creatorDisplayName(selectedCreator) }));
                   if (playable.length > 0) openPlayer(playable, index);
                 }}
               />
@@ -347,7 +591,9 @@ export function LibraryPage() {
                 collections={collections.data}
                 isPending={collections.isPending}
                 onPick={(id) => {
-                  setCollectionId(id);
+                  setCollectionId(id); // 单合集聚焦(契约 v1.4b:与排除互斥,聚焦时清空排除)
+                  setExcludeIds([]);
+                  setSinglesOnly(false);
                   setTab("works");
                 }}
               />
@@ -363,6 +609,33 @@ export function LibraryPage() {
           />
         )}
       </section>
+
+      <AddCreatorDialog
+        open={wizardOpen}
+        onOpenChange={setWizardOpen}
+        profileUrl={profileUrl.trim()}
+        groupSuggestions={groupSuggestions}
+        pending={addCreatorMut.isPending}
+        onSubmit={(input) => addCreatorMut.mutate(input)}
+      />
+
+      {selectedCreator ? (
+        <RenameGroupDialog
+          creator={selectedCreator}
+          groupSuggestions={groupSuggestions}
+          open={renameOpen}
+          onOpenChange={setRenameOpen}
+        />
+      ) : null}
+
+      {selectedCreator ? (
+        <MonitorDialog
+          creator={selectedCreator}
+          sub={selectedCreatorSub}
+          open={monitorOpen}
+          onOpenChange={setMonitorOpen}
+        />
+      ) : null}
 
       <ConfirmDialog
         open={confirmRedownloadOpen}
@@ -387,23 +660,27 @@ export function LibraryPage() {
   );
 }
 
-/** 博主卡片:基础信息 + 已下载数 + SSE 扫描实时进度(scan-store)。 */
+/** 博主卡片:显示 别名 ?? 昵称(alias 存在时次要文字显示原昵称)+ 监控状态 Badge + SSE 扫描实时进度(scan-store)。 */
 function CreatorCard({
   creator,
   active,
   live,
+  monitor,
   onClick,
   onRescan,
   rescanPending,
 }: {
-  creator: { id: number; nickname: string; avatar_url: string; works_count: number; downloaded_count: number; download_bytes: number };
+  creator: { id: number; nickname: string; alias: string | null; group: string | null; avatar_url: string; works_count: number; downloaded_count: number; download_bytes: number };
   active: boolean;
   live: LiveScan | undefined;
+  /** 该博主的 creator 级订阅(无则不显示监控徽标;enabled=false 显示"已暂停")。 */
+  monitor?: Subscription;
   onClick: () => void;
   onRescan: () => void;
   rescanPending: boolean;
 }) {
   const scanning = Boolean(live?.running);
+  const displayName = creator.alias ?? creator.nickname;
   return (
     <div
       role="button"
@@ -419,11 +696,36 @@ function CreatorCard({
         "relative w-full cursor-pointer rounded-xl border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
         active ? "border-primary/60 bg-accent" : "border-border hover:bg-accent/50",
       )}
+      title={creator.alias ? `别名:${creator.alias} · 原昵称:${creator.nickname}` : creator.nickname}
     >
       <div className="flex items-center gap-2.5">
         <img src={creator.avatar_url} alt="" className="size-9 shrink-0 rounded-full object-cover" />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium" title={creator.nickname}>{creator.nickname}</p>
+          <p className="flex min-w-0 items-center gap-1 text-sm font-medium">
+            <span className="truncate">{displayName}</span>
+            {monitor ? (
+              monitor.enabled ? (
+                <Badge
+                  variant="info"
+                  className="shrink-0 gap-0.5 px-1 py-0 text-[10px] leading-4"
+                  title={`监控中 · 每 ${monitor.interval_minutes} 分钟检查一次`}
+                >
+                  <BellRing className="size-2.5" /> 监控中
+                </Badge>
+              ) : (
+                <Badge
+                  variant="muted"
+                  className="shrink-0 px-1 py-0 text-[10px] leading-4"
+                  title="订阅存在但已暂停,可在监控页或详情页恢复"
+                >
+                  已暂停
+                </Badge>
+              )
+            ) : null}
+          </p>
+          {creator.alias ? (
+            <p className="truncate text-[11px] text-muted-foreground">{creator.nickname}</p>
+          ) : null}
           <p className="text-[11px] text-muted-foreground">
             {creator.works_count} 作品 · 已下载 {creator.downloaded_count} · {formatBytes(creator.download_bytes)}
           </p>
@@ -475,6 +777,512 @@ function failedCountOf(res: MoveDownloadsResult): number {
   const failed: unknown = res.failed_files;
   if (Array.isArray(failed)) return failed.length;
   return typeof failed === "number" ? failed : 0;
+}
+
+/**
+ * 添加博主引导弹窗(契约 v1.4/1.4b):
+ * 展示解析出的链接;可选 别名 / 分组(已有分组建议 + 可输入新名)/ 独立下载根;
+ * "加入监控"开启时显示 间隔(分钟)+ 画质 + "自动下载新作品" 开关;
+ * 确认把全部字段 POST 给 /api/creators;202 后的 SSE 扫描进度逻辑不变。
+ */
+function AddCreatorDialog({
+  open,
+  onOpenChange,
+  profileUrl,
+  groupSuggestions,
+  pending,
+  onSubmit,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  profileUrl: string;
+  groupSuggestions: string[];
+  pending: boolean;
+  onSubmit: (input: CreateCreatorInput) => void;
+}) {
+  const { data: settings } = useSettings();
+  const [alias, setAlias] = useState("");
+  const [group, setGroup] = useState("");
+  const [downloadRoot, setDownloadRoot] = useState("");
+  const [monitor, setMonitor] = useState(true);
+  const [intervalInput, setIntervalInput] = useState("60");
+  const [quality, setQuality] = useState<Quality>("1080p");
+  const [autoDownload, setAutoDownload] = useState(true);
+
+  // 打开瞬间重置表单;画质默认跟随全局设置
+  useEffect(() => {
+    if (open) {
+      setAlias("");
+      setGroup("");
+      setDownloadRoot("");
+      setMonitor(true);
+      setIntervalInput("60");
+      setAutoDownload(true);
+      const gq = settings?.download_quality;
+      setQuality(gq === "540p" || gq === "720p" || gq === "1080p" ? gq : "1080p");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const globalRoot = settings?.download_root?.trim() ?? "";
+  const rootPlaceholder = globalRoot
+    ? `留空 = 跟随全局(${truncateMiddle(globalRoot, 26)})`
+    : "留空 = 使用默认下载目录";
+
+  const handleSubmit = () => {
+    const interval = Number(intervalInput);
+    if (monitor && (!Number.isInteger(interval) || interval < 1)) {
+      toast.error("监控间隔不合法", { description: "间隔需为 >= 1 的整数(分钟)" });
+      return;
+    }
+    if (downloadRoot.trim() && !isAbsolutePath(downloadRoot.trim())) {
+      toast.error("下载根目录不合法", { description: "需为绝对路径,如 D:\\Media\\Douyin" });
+      return;
+    }
+    onSubmit({
+      profile_url: profileUrl,
+      alias: alias.trim() || undefined,
+      group: group.trim() || undefined,
+      download_root: downloadRoot.trim() || undefined,
+      subscribe: monitor
+        ? { interval_minutes: interval, quality, auto_download: autoDownload }
+        : undefined,
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-base">添加博主</DialogTitle>
+          <DialogDescription>确认后立即开始首次扫描,可在扫描完成前继续操作其他博主</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3.5">
+          <div className="space-y-1.5">
+            <Label>博主链接</Label>
+            <p className="max-h-16 overflow-y-auto break-all rounded-md border border-border bg-muted/40 px-2.5 py-1.5 font-mono text-xs">
+              {profileUrl}
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="add-creator-alias">别名(可选)</Label>
+            <Input
+              id="add-creator-alias"
+              value={alias}
+              onChange={(e) => setAlias(e.target.value)}
+              placeholder="默认使用博主昵称"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="add-creator-group">分组(可选)</Label>
+            <Input
+              id="add-creator-group"
+              value={group}
+              onChange={(e) => setGroup(e.target.value)}
+              placeholder="输入新分组名,或点选下方建议"
+            />
+            {groupSuggestions.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {groupSuggestions.map((g) => (
+                  <button
+                    key={g}
+                    type="button"
+                    onClick={() => setGroup(g)}
+                    className={cn(
+                      "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+                      group === g
+                        ? "border-primary/60 bg-accent text-foreground"
+                        : "border-border text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                    )}
+                  >
+                    {g}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="add-creator-root">独立下载根目录(可选)</Label>
+            <Input
+              id="add-creator-root"
+              className="font-mono text-xs"
+              value={downloadRoot}
+              onChange={(e) => setDownloadRoot(e.target.value)}
+              placeholder={rootPlaceholder}
+            />
+          </div>
+          <label
+            htmlFor="add-creator-monitor"
+            className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2.5"
+          >
+            <span className="min-w-0">
+              <span className="block text-sm">加入监控</span>
+              <span className="block text-[11px] text-muted-foreground">
+                定期扫描该博主主页,及时发现新作品
+              </span>
+            </span>
+            <Switch
+              id="add-creator-monitor"
+              checked={monitor}
+              onCheckedChange={setMonitor}
+              disabled={pending}
+            />
+          </label>
+          {monitor ? (
+            <div className="space-y-3 rounded-lg border border-border px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="add-creator-interval" className="w-24 shrink-0 text-sm">
+                  间隔(分钟)
+                </Label>
+                <Input
+                  id="add-creator-interval"
+                  type="number"
+                  min={1}
+                  value={intervalInput}
+                  onChange={(e) => setIntervalInput(e.target.value)}
+                  className="h-8 w-24"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="add-creator-quality" className="w-24 shrink-0 text-sm">
+                  下载画质
+                </Label>
+                <Select value={quality} onValueChange={(v) => setQuality(v as Quality)}>
+                  <SelectTrigger id="add-creator-quality" className="h-8 w-28">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {QUALITIES.map((q2) => (
+                      <SelectItem key={q2} value={q2}>
+                        {q2}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm">自动下载新作品</span>
+                <Switch
+                  checked={autoDownload}
+                  onCheckedChange={setAutoDownload}
+                  disabled={pending}
+                  aria-label="自动下载新作品"
+                />
+              </div>
+            </div>
+          ) : null}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
+            取消
+          </Button>
+          <Button onClick={handleSubmit} disabled={pending}>
+            {pending ? "添加中…" : "确认添加"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * 重命名 / 分组弹窗(契约 v1.4):编辑 别名(空 = 恢复默认昵称)与 分组(空 = 未分组),
+ * PATCH /api/creators/{id};已有分组作为点选建议。
+ */
+function RenameGroupDialog({
+  creator,
+  groupSuggestions,
+  open,
+  onOpenChange,
+}: {
+  creator: Creator;
+  groupSuggestions: string[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [aliasInput, setAliasInput] = useState("");
+  const [groupInput, setGroupInput] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setAliasInput(creator.alias ?? "");
+      setGroupInput(creator.group ?? "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const patchMut = useMutation({
+    mutationFn: (vars: { id: number; alias: string | null; group: string | null }) =>
+      patchCreator(vars.id, { alias: vars.alias, group: vars.group }),
+    onSuccess: (res) => {
+      toast.success("已保存", {
+        description: `显示名:${res.alias ?? "默认昵称"} · 分组:${res.group ?? "未分组"}`,
+      });
+      void queryClient.invalidateQueries({ queryKey: qk.creators });
+      onOpenChange(false);
+    },
+    onError: (e) => toast.error("保存失败", { description: e.message }),
+  });
+
+  const suggestions = groupSuggestions.filter((g) => g !== creator.group);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-base">重命名 / 分组 · {creator.nickname}</DialogTitle>
+          <DialogDescription>别名与分组仅影响显示与左列分组树,不影响下载</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3.5">
+          <div className="space-y-1.5">
+            <Label htmlFor="rename-creator-alias">别名</Label>
+            <Input
+              id="rename-creator-alias"
+              value={aliasInput}
+              onChange={(e) => setAliasInput(e.target.value)}
+              placeholder="留空 = 恢复默认昵称"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="rename-creator-group">分组</Label>
+            <Input
+              id="rename-creator-group"
+              value={groupInput}
+              onChange={(e) => setGroupInput(e.target.value)}
+              placeholder="留空 = 未分组"
+            />
+            {suggestions.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {suggestions.map((g) => (
+                  <button
+                    key={g}
+                    type="button"
+                    onClick={() => setGroupInput(g)}
+                    className={cn(
+                      "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+                      groupInput === g
+                        ? "border-primary/60 bg-accent text-foreground"
+                        : "border-border text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                    )}
+                  >
+                    {g}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={patchMut.isPending}>
+            取消
+          </Button>
+          <Button
+            onClick={() =>
+              patchMut.mutate({
+                id: creator.id,
+                alias: aliasInput.trim() === "" ? null : aliasInput.trim(),
+                group: groupInput.trim() === "" ? null : groupInput.trim(),
+              })
+            }
+            disabled={patchMut.isPending}
+          >
+            {patchMut.isPending ? "保存中…" : "保存"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * 监控快捷弹窗(详情标题行"添加监控 / 监控中"入口):
+ * 无订阅 → POST /api/subscriptions(creator 级);
+ * 已有订阅 → 预填参数,PATCH /api/subscriptions/{id};另提供"移除监控"(DELETE,带确认)。
+ */
+function MonitorDialog({
+  creator,
+  sub,
+  open,
+  onOpenChange,
+}: {
+  creator: Creator;
+  sub: Subscription | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { data: settings } = useSettings();
+  const [intervalInput, setIntervalInput] = useState("60");
+  const [quality, setQuality] = useState<Quality>("1080p");
+  const [autoDownload, setAutoDownload] = useState(true);
+  const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      const gq = settings?.download_quality;
+      setQuality(
+        sub && isQuality(sub.quality)
+          ? sub.quality
+          : isQuality(gq) ? gq : "1080p",
+      );
+      setIntervalInput(String(sub?.interval_minutes ?? 60));
+      setAutoDownload(sub?.auto_download ?? true);
+      setConfirmRemoveOpen(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const invalidate = () => void queryClient.invalidateQueries({ queryKey: qk.subscriptions });
+
+  const createMut = useMutation({
+    mutationFn: () =>
+      createSubscription({
+        target_type: "creator",
+        creator_id: creator.id,
+        interval_minutes: Number(intervalInput),
+        auto_download: autoDownload,
+        quality,
+      }),
+    onSuccess: (s) => {
+      toast.success("已加入监控", {
+        description: `将每 ${s.interval_minutes} 分钟检查「${creatorDisplayName(creator)}」`,
+      });
+      invalidate();
+      onOpenChange(false);
+    },
+    onError: (e) => toast.error("添加监控失败", { description: e.message }),
+  });
+
+  const patchMut = useMutation({
+    mutationFn: () =>
+      updateSubscription(sub!.id, {
+        interval_minutes: Number(intervalInput),
+        auto_download: autoDownload,
+        quality,
+      }),
+    onSuccess: () => {
+      toast.success("监控设置已保存");
+      invalidate();
+      onOpenChange(false);
+    },
+    onError: (e) => toast.error("保存监控设置失败", { description: e.message }),
+  });
+
+  const removeMut = useMutation({
+    mutationFn: () => deleteSubscription(sub!.id),
+    onSuccess: () => {
+      toast.success("已移除监控", { description: `不再自动检查「${creatorDisplayName(creator)}」` });
+      invalidate();
+      onOpenChange(false);
+    },
+    onError: (e) => toast.error("移除监控失败", { description: e.message }),
+  });
+
+  const handleSave = () => {
+    const interval = Number(intervalInput);
+    if (!Number.isInteger(interval) || interval < 1 || interval > 10080) {
+      toast.error("间隔不合法", { description: "间隔需为 1 ~ 10080 之间的整数分钟" });
+      return;
+    }
+    if (sub) patchMut.mutate();
+    else createMut.mutate();
+  };
+
+  const pending = createMut.isPending || patchMut.isPending || removeMut.isPending;
+
+  return (
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base">
+              {sub ? "管理监控" : "添加监控"} · {creatorDisplayName(creator)}
+            </DialogTitle>
+            <DialogDescription>
+              {sub
+                ? "调整检查间隔 / 画质 / 自动下载;移除后不再自动扫描该博主"
+                : "按设定间隔自动扫描该博主主页,新作品可自动下载"}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Label htmlFor="monitor-interval" className="w-24 shrink-0 text-sm">
+                间隔(分钟)
+              </Label>
+              <Input
+                id="monitor-interval"
+                type="number"
+                min={1}
+                value={intervalInput}
+                onChange={(e) => setIntervalInput(e.target.value)}
+                className="h-8 w-24"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="monitor-quality" className="w-24 shrink-0 text-sm">
+                下载画质
+              </Label>
+              <Select value={quality} onValueChange={(v) => setQuality(v as Quality)}>
+                <SelectTrigger id="monitor-quality" className="h-8 w-28">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {QUALITIES.map((q2) => (
+                    <SelectItem key={q2} value={q2}>
+                      {q2}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
+              <span>
+                <span className="block text-sm">自动下载新作品</span>
+                <span className="block text-[11px] text-muted-foreground">关闭时仅记录,需手动下载</span>
+              </span>
+              <Switch checked={autoDownload} onCheckedChange={setAutoDownload} disabled={pending} aria-label="自动下载新作品" />
+            </div>
+          </div>
+          <DialogFooter className="sm:justify-between">
+            {sub ? (
+              <Button
+                type="button"
+                variant="ghost"
+                className="text-destructive hover:text-destructive"
+                onClick={() => setConfirmRemoveOpen(true)}
+                disabled={pending}
+              >
+                <BellOff className="size-3.5" /> 移除监控
+              </Button>
+            ) : <span />}
+            <span className="flex gap-2">
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
+                取消
+              </Button>
+              <Button onClick={handleSave} disabled={pending}>
+                {pending ? "保存中…" : sub ? "保存" : "添加监控"}
+              </Button>
+            </span>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <ConfirmDialog
+        open={confirmRemoveOpen}
+        onOpenChange={setConfirmRemoveOpen}
+        title={`移除对「${creatorDisplayName(creator)}」的监控?`}
+        description="移除后将不再自动扫描该博主;已下载文件与订阅统计不受影响。"
+        confirmLabel="移除监控"
+        destructive
+        loading={removeMut.isPending}
+        onConfirm={() => removeMut.mutate()}
+      />
+    </>
+  );
+}
+
+function isQuality(v: unknown): v is Quality {
+  return v === "540p" || v === "720p" || v === "1080p";
 }
 
 /**

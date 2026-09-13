@@ -9,11 +9,21 @@ import { EmptyState } from "../../components/empty-state";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../../components/ui/dropdown-menu";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { Skeleton } from "../../components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { formatDuration, formatDate } from "../../lib/format";
+import { cn } from "../../lib/utils";
 import { Link } from "react-router";
 import { Download, FileVideo, Film, Image as ImageIcon, ListFilter, Play, RefreshCw, Search, Sunrise, Trash2, X } from "lucide-react";
 import { Pager } from "./pager";
@@ -26,8 +36,15 @@ interface WorksPanelProps {
   /** 筛选/排序/分页(受控,状态在 LibraryPage,切 Tab 不丢) */
   q: string;
   onQChange: (q: string) => void;
-  collectionId: number | null | "none";
-  onCollectionChange: (id: number | null | "none") => void;
+  /** 契约 v1.4b:多选排除合集(勾选的合集其作品被隐藏) */
+  excludeIds: number[];
+  onToggleExclude: (id: number) => void;
+  /** 单发作品开关(契约 v1.2 保留:collection_id=none) */
+  singlesOnly: boolean;
+  onSinglesOnlyChange: (v: boolean) => void;
+  /** 单合集聚焦(合集面板"查看作品"入口;与排除互斥) */
+  collectionId: number | null;
+  onCollectionFocusChange: (id: number | null) => void;
   /** 契约 v1.2:type 筛选(null=全部类型;live=含动图片段的图集) */
   type: WorkTypeFilter | null;
   onTypeChange: (type: WorkTypeFilter | null) => void;
@@ -87,7 +104,9 @@ const DL_OPTIONS: { value: WorkDlFilter; label: string }[] = [
 export function WorksPanel(props: WorksPanelProps) {
   const {
     works, isPending, isFetching, collections,
-    q, onQChange, collectionId, onCollectionChange, type, onTypeChange, dl, onDlChange, sort, onSortChange,
+    q, onQChange, excludeIds, onToggleExclude, singlesOnly, onSinglesOnlyChange,
+    collectionId, onCollectionFocusChange,
+    type, onTypeChange, dl, onDlChange, sort, onSortChange,
     page, pageSize, onPageChange, onPageSizeChange,
     selected, pageItems, onToggleRow, onSelectPage, onClearSelection, onSelectAllFiltered, selectAllPending,
     quality, onQualityChange, onDownload, downloadPending, onPlay,
@@ -98,7 +117,17 @@ export function WorksPanel(props: WorksPanelProps) {
   const pageSelected = pageItems.filter((w) => selected.has(w.id)).length;
   const allPageSelected = pageItems.length > 0 && pageSelected === pageItems.length;
   const somePageSelected = pageSelected > 0 && !allPageSelected;
-  const hasFilter = q !== "" || collectionId !== null || type !== null || dl !== null;
+  const hasFilter =
+    q !== "" || singlesOnly || excludeIds.length > 0 || collectionId !== null || type !== null || dl !== null;
+  const focusedName = collectionId !== null ? collections.find((c) => c.id === collectionId)?.name : undefined;
+  const collectionLabel =
+    collectionId !== null
+      ? `合集:${focusedName ?? `#${collectionId}`}`
+      : singlesOnly
+        ? "仅看单发"
+        : excludeIds.length > 0
+          ? `排除合集(${excludeIds.length})`
+          : "全部合集";
 
   // 可播放列表 = 当前页已下载作品(播放器内保持列表顺序)
   const playable = pageItems.filter((w) => w.dl_status === "succeeded");
@@ -118,26 +147,57 @@ export function WorksPanel(props: WorksPanelProps) {
             aria-label="搜索作品"
           />
         </div>
-        <Select
-          value={collectionId === null ? "all" : collectionId === "none" ? "none" : String(collectionId)}
-          onValueChange={(v) =>
-            onCollectionChange(v === "all" ? null : v === "none" ? "none" : Number(v))
-          }
-        >
-          <SelectTrigger className="w-44" aria-label="按合集筛选">
-            <ListFilter className="size-3.5 text-muted-foreground" />
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部合集</SelectItem>
-            <SelectItem value="none">单发作品(排除合集)</SelectItem>
-            {collections.map((c) => (
-              <SelectItem key={c.id} value={String(c.id)}>
-                {c.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              className={cn(
+                "w-44 justify-start gap-2 font-normal",
+                (singlesOnly || excludeIds.length > 0 || collectionId !== null) && "border-primary/50 text-foreground",
+              )}
+              aria-label="按合集筛选(多选排除)"
+            >
+              <ListFilter className="size-3.5 text-muted-foreground" />
+              <span className="truncate">{collectionLabel}</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="max-h-80 w-60 overflow-y-auto">
+            <DropdownMenuLabel>合集筛选</DropdownMenuLabel>
+            {collectionId !== null ? (
+              <DropdownMenuItem onSelect={() => onCollectionFocusChange(null)}>
+                取消查看合集({focusedName ?? collectionId})
+              </DropdownMenuItem>
+            ) : null}
+            {/* 单发作品开关(契约 v1.2 保留) */}
+            <DropdownMenuCheckboxItem
+              checked={singlesOnly}
+              onCheckedChange={(v) => onSinglesOnlyChange(v === true)}
+              onSelect={(e) => e.preventDefault()}
+            >
+              仅看单发作品(排除合集)
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+              勾选以排除对应合集
+            </DropdownMenuLabel>
+            {collections.length === 0 ? (
+              <div className="px-2 py-1.5 text-xs text-muted-foreground">该博主暂无合集</div>
+            ) : (
+              collections.map((c) => (
+                <DropdownMenuCheckboxItem
+                  key={c.id}
+                  checked={excludeIds.includes(c.id)}
+                  disabled={collectionId !== null}
+                  onCheckedChange={() => onToggleExclude(c.id)}
+                  onSelect={(e) => e.preventDefault()}
+                >
+                  <span className="truncate" title={c.name}>{c.name}</span>
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">{c.works_count}</span>
+                </DropdownMenuCheckboxItem>
+              ))
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Select
           value={type === null ? "all" : type}
           onValueChange={(v) => onTypeChange(v === "all" ? null : (v as WorkTypeFilter))}

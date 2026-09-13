@@ -9,11 +9,14 @@ import type {
   BatchActionResult,
   BatchIdsResult,
   Collection,
+  CreateCreatorInput,
   CreateCreatorResult,
   CreateDownloadsResult,
   Creator,
   CreatorDetail,
   CreatorDownloadRootResult,
+  CreatorPatch,
+  CreatorPatchResult,
   CursorPage,
   DownloadsSummary,
   Health,
@@ -63,9 +66,13 @@ export const getHealth = () => api<Health>("/api/health");
 
 // ---------- 博主与作品 ----------
 export const listCreators = () => api<Creator[]>("/api/creators");
-export const createCreator = (profileUrl: string) =>
-  api<CreateCreatorResult>("/api/creators", { method: "POST", json: { profile_url: profileUrl } });
+/** 契约 v1.4:创建时可带可选参数(别名/分组/独立下载根/自动下载+画质);202 后 SSE 报扫描进度。 */
+export const createCreator = (input: CreateCreatorInput) =>
+  api<CreateCreatorResult>("/api/creators", { method: "POST", json: input });
 export const getCreator = (id: number) => api<CreatorDetail>(`/api/creators/${id}`);
+/** 契约 v1.4:改别名/分组;null 或空串 = 清除(别名恢复默认昵称,分组移出)。 */
+export const patchCreator = (id: number, patch: CreatorPatch) =>
+  api<CreatorPatchResult>(`/api/creators/${id}`, { method: "PATCH", json: patch });
 export const deleteCreator = (id: number) => api<{ ok: boolean }>(`/api/creators/${id}`, { method: "DELETE" });
 /** 契约 v1.3:设置博主独立下载根目录;path=null 表示清除,跟随全局。后端自动建目录。 */
 export const setCreatorDownloadRoot = (id: number, path: string | null) =>
@@ -91,6 +98,8 @@ export interface WorksListParams {
   q?: string;
   collection_id?: number;
   collection_none?: boolean;
+  /** 契约 v1.4b:多选排除合集(与 collection_id 互斥,后端以 exclude 为准)。 */
+  exclude_collection_ids?: number[];
   /** 契约 v1.2:type=live 表示含动图片段的图集。 */
   type?: WorkTypeFilter;
   /** 契约 v1.2:按 dl_status 过滤。 */
@@ -105,7 +114,10 @@ export function listWorks(creatorId: number, params: WorksListParams): Promise<P
     sort: params.sort,
   });
   if (params.q) sp.set("q", params.q);
-  if (params.collection_none) {
+  if (params.exclude_collection_ids?.length) {
+    // 契约 v1.4b:exclude 优先,不再发送 collection_id/collection_none。
+    sp.set("exclude_collection_ids", params.exclude_collection_ids.join(","));
+  } else if (params.collection_none) {
     sp.set("collection_id", "none");
   } else if (params.collection_id !== undefined) {
     sp.set("collection_id", String(params.collection_id));
@@ -124,6 +136,8 @@ export interface BatchIdsFilters {
   collection_none?: boolean;
   q?: string;
   collection_id?: number;
+  /** 契约 v1.4b:多选排除合集(JSON 数组,与列表语义一致)。 */
+  exclude_collection_ids?: number[];
   type?: WorkTypeFilter;
   dl?: WorkDlFilter;
 }
@@ -134,7 +148,14 @@ export const batchWorkIds = (creatorId: number, filters?: BatchIdsFilters) =>
     json: {
       creator_id: creatorId,
       ...(filters?.q ? { q: filters.q } : {}),
-      ...(filters?.collection_id !== undefined ? { collection_id: filters.collection_id } : {}),
+      ...(filters?.exclude_collection_ids?.length
+        ? { exclude_collection_ids: filters.exclude_collection_ids }
+        : {}),
+      ...(filters?.exclude_collection_ids?.length
+        ? {}
+        : filters?.collection_id !== undefined
+          ? { collection_id: filters.collection_id }
+          : {}),
       ...(filters?.type ? { type: filters.type } : {}),
       ...(filters?.dl ? { dl: filters.dl } : {}),
     },

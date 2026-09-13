@@ -59,6 +59,10 @@ export interface Creator {
   id: number;
   sec_uid: string;
   nickname: string;
+  /** 契约 v1.4:用户设置的显示别名;null = 显示默认昵称 nickname。 */
+  alias: string | null;
+  /** 契约 v1.4:分组名;null = 未分组。 */
+  group: string | null;
   avatar_url: string;
   profile_url: string;
   reported_work_count: number;
@@ -88,9 +92,46 @@ export interface CreatorDetail extends Creator {
   last_scan: ScanRun | null;
 }
 
+/** 契约 v1.4b:POST /api/creators subscribe 对象(创建/刷新 creator 级订阅)。 */
+export interface CreatorSubscribeInput {
+  /** 监控间隔(分钟),必填 >= 1。 */
+  interval_minutes: number;
+  /** 画质;省略 = 全局默认画质。 */
+  quality?: string;
+  /** 自动下载新作品;省略 = true。 */
+  auto_download?: boolean;
+}
+
+/** 契约 v1.4/1.4b:POST /api/creators 的可选参数(202 响应新增 creator 摘要)。 */
+export interface CreateCreatorInput {
+  profile_url: string;
+  /** 独立下载根目录(绝对路径,后端校验并自动创建);省略 = 跟随全局。 */
+  download_root?: string;
+  /** 非空时同时创建 creator 级订阅(契约 v1.4b)。 */
+  subscribe?: CreatorSubscribeInput;
+  /** 初始分组名;空 = 未分组。 */
+  group?: string;
+  /** 显示别名;空 = 用默认昵称。 */
+  alias?: string;
+}
+
 export interface CreateCreatorResult {
   creator_id: number;
   scan_id: number;
+  /** 契约 v1.4:202 响应带回完整 creator 视图(含 alias/group)。 */
+  creator?: Creator;
+}
+
+/** 契约 v1.4:PATCH /api/creators/{id} 请求与响应。alias/group null 或空串 = 清除。 */
+export interface CreatorPatch {
+  alias?: string | null;
+  group?: string | null;
+}
+
+export interface CreatorPatchResult {
+  ok: boolean;
+  alias: string | null;
+  group: string | null;
 }
 
 export interface RescanResult {
@@ -169,6 +210,8 @@ export interface WorksQuery {
   collection_id?: number;
   /** "none" = 只看单发作品(排除合集) */
   collection_none?: boolean;
+  /** 契约 v1.4b:多选排除合集(与 collection_id 互斥,exclude 优先)。 */
+  exclude_collection_ids?: number[];
   /** 契约 v1.2:type=live 表示含动图片段的图集。 */
   type?: WorkTypeFilter;
   dl?: WorkDlFilter;

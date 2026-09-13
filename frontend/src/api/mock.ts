@@ -71,6 +71,10 @@ interface MockCreator {
   id: number;
   sec_uid: string;
   nickname: string;
+  /** 契约 v1.4:显示别名;null = 用昵称。 */
+  alias: string | null;
+  /** 契约 v1.4:分组名;null = 未分组。 */
+  group_name: string | null;
   avatar_url: string;
   profile_url: string;
   reported_work_count: number;
@@ -362,6 +366,8 @@ function seed(): void {
       id: ++state.ids.creator,
       sec_uid: `MS4wLjABAAAA_seed_${state.ids.creator}_${hashString(nickname).toString(36)}`,
       nickname,
+      alias: null,
+      group_name: null,
       avatar_url: avatarSvg(nickname[0], (hashString(nickname) % 300) + 20),
       profile_url: `https://www.douyin.com/user/MS4wLjABAAAA_seed_${state.ids.creator}`,
       reported_work_count: reported,
@@ -385,20 +391,24 @@ function seed(): void {
     });
   };
 
-  // 博主 1:川流不息(128 作品,状态分布均衡,含 1 个合集)
+  // 博主 1:川流不息(128 作品,状态分布均衡,含 1 个合集;契约 v1.4 分组示例)
   const c1 = seedCreator("川流不息", 128);
+  c1.group_name = "摄影";
   const [col1] = seedCollections(c1, ["城市夜行手记"]);
   const w1 = makeWorks(c1, 128, now - 86400_000, [col1]);
   state.works.push(...w1);
 
   // 博主 2:山城影像志(502 作品,部分已下载)
   const c2 = seedCreator("山城影像志", 502);
+  c2.group_name = "日常";
   seedCollections(c2, ["两江夜色", "老城阶梯", "雾都十二时辰", "轻轨穿楼", "方言故事"]);
   const w2 = makeWorks(c2, 502, now - 2 * 86400_000, []);
   state.works.push(...w2);
 
-  // 博主 3:夜晚放映厅(36 作品 + 3 合集,大多已下载)
+  // 博主 3:夜晚放映厅(36 作品 + 3 合集,大多已下载;契约 v1.4 别名示例)
   const c3 = seedCreator("夜晚放映厅", 36);
+  c3.alias = "夜放";
+  c3.group_name = "摄影";
   const cols3 = seedCollections(c3, ["默片修复所", "午夜短片", "配乐实验"]);
   const w3 = makeWorks(c3, 36, now - 3 * 86400_000, cols3);
   state.works.push(...w3);
@@ -890,6 +900,8 @@ function creatorJson(c: MockCreator): Creator {
     id: c.id,
     sec_uid: c.sec_uid,
     nickname: c.nickname,
+    alias: c.alias,
+    group: c.group_name,
     avatar_url: c.avatar_url,
     profile_url: c.profile_url,
     reported_work_count: c.reported_work_count,
@@ -1033,13 +1045,23 @@ function listWorks(creatorId: number, query: URLSearchParams, forceCollectionId?
   const pageSize = Math.min(100, Math.max(1, optNum(query.get("page_size")) ?? 20));
   const q = (query.get("q") ?? "").trim().toLowerCase();
   const cid = forceCollectionId ?? optNum(query.get("collection_id"));
+  // 契约 v1.4b:多选排除合集(逗号分隔);仅博主作品列表支持,exclude 优先于 cid
+  const excludeRaw = forceCollectionId === undefined ? (query.get("exclude_collection_ids") ?? "") : "";
+  const excludeIds = excludeRaw
+    .split(",")
+    .map((s) => optNum(s.trim()))
+    .filter((n): n is number => n !== undefined && n > 0);
   const type = query.get("type") ?? "";
   const dl = query.get("dl") ?? "";
   const sort = query.get("sort") ?? "published_at_desc";
   const latest = latestJobByWork();
 
   let items = state.works.filter((w) => w.creator_id === creatorId);
-  if (cid !== undefined) items = items.filter((w) => w.collection_id === cid);
+  if (excludeIds.length > 0) {
+    items = items.filter((w) => w.collection_id === null || !excludeIds.includes(w.collection_id));
+  } else if (cid !== undefined) {
+    items = items.filter((w) => w.collection_id === cid);
+  }
   if (q) items = items.filter((w) => w.title.toLowerCase().includes(q) || w.item_id.toLowerCase().includes(q));
   if (type || dl) items = items.filter((w) => matchesTypeDl(w, type, dl, latest));
   items = items.slice().sort((a, b) => {
@@ -1070,6 +1092,41 @@ function retryJob(job: MockJob, quality: string | undefined): void {
   job.queued_at = iso(Date.now());
   job.fail_plan = null;
   emitStatus(job);
+}
+
+/** 契约 v1.4:可选文本字段 — null/空串 = 清除(null),有值 = 设置。 */
+function optionalTextOf(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  return s === "" ? null : s;
+}
+
+/** 契约 v1.4b:创建/刷新 creator 级订阅(subscribe 对象语义)。 */
+function upsertCreatorSubscription(creatorId: number, intervalMinutes: number, quality: string, autoDownload: boolean): void {
+  const existing = state.subs.find(
+    (s) => s.target_type === "creator" && s.creator_id === creatorId && s.collection_id === null,
+  );
+  if (existing) {
+    existing.interval_minutes = intervalMinutes;
+    existing.quality = quality;
+    existing.auto_download = autoDownload;
+    existing.enabled = true;
+    return;
+  }
+  state.subs.push({
+    id: ++state.ids.sub,
+    target_type: "creator",
+    creator_id: creatorId,
+    collection_id: null,
+    interval_minutes: intervalMinutes,
+    auto_download: autoDownload,
+    quality,
+    enabled: true,
+    last_run_at: null,
+    created_at: iso(Date.now()),
+    new_works: 0,
+    new_downloaded: 0,
+  });
 }
 
 export function mockRoute(req: MockRequest): MockResponse {
@@ -1148,25 +1205,54 @@ export function mockRoute(req: MockRequest): MockResponse {
         const profileUrl = str(b.profile_url).trim();
         if (!profileUrl) return err(400, "profile_url 不能为空");
         const secUid = extractSecUid(profileUrl);
+        // 契约 v1.4/1.4b 可选参数(重复添加同样生效;缺省字段保持原值)
+        const alias = b.alias === undefined ? undefined : optionalTextOf(b.alias);
+        const group = b.group === undefined ? undefined : optionalTextOf(b.group);
+        let downloadRoot: string | null | undefined;
+        if (b.download_root !== undefined && b.download_root !== null) {
+          const p = str(b.download_root).trim();
+          if (p) {
+            if (!isAbsolutePath(p)) return err(400, "download_root 必须为绝对路径,如 D:\\Media\\Douyin");
+            downloadRoot = p;
+          } else {
+            downloadRoot = null;
+          }
+        }
+        const subscribe = asRecord(b.subscribe);
+        let applySubscribe: { interval: number; quality: string; autoDownload: boolean } | null = null;
+        if (b.subscribe !== undefined && b.subscribe !== null) {
+          const interval = Math.max(1, num(subscribe.interval_minutes, 0));
+          if (interval < 1) return err(400, "subscribe.interval_minutes 必填且 >= 1");
+          const quality = str(subscribe.quality, state.settings.download_quality) || "1080p";
+          const autoDownload = subscribe.auto_download === undefined ? true : bool(subscribe.auto_download, true);
+          applySubscribe = { interval, quality, autoDownload };
+        }
         const existing = state.creators.find((c) => c.sec_uid === secUid || c.profile_url === profileUrl);
         if (existing) {
+          if (alias !== undefined) existing.alias = alias;
+          if (group !== undefined) existing.group_name = group;
+          if (downloadRoot !== undefined) existing.download_root = downloadRoot;
+          if (applySubscribe) upsertCreatorSubscription(existing.id, applySubscribe.interval, applySubscribe.quality, applySubscribe.autoDownload);
           const scanId = startScan(existing.id, false);
-          return { status: 202, json: { creator_id: existing.id, scan_id: scanId } };
+          return { status: 202, json: { creator_id: existing.id, scan_id: scanId, creator: creatorJson(existing) } };
         }
         const nickname = `新博主·${pick(NICK_POOL)}`;
         const creator: MockCreator = {
           id: ++state.ids.creator,
           sec_uid: secUid,
           nickname,
+          alias: alias ?? null,
+          group_name: group ?? null,
           avatar_url: avatarSvg(nickname[0], (hashString(nickname) % 300) + 20),
           profile_url: profileUrl,
           reported_work_count: ri(60, 420),
-          download_root: null,
+          download_root: downloadRoot ?? null,
           created_at: iso(now),
         };
         state.creators.push(creator);
+        if (applySubscribe) upsertCreatorSubscription(creator.id, applySubscribe.interval, applySubscribe.quality, applySubscribe.autoDownload);
         const scanId = startScan(creator.id, true);
-        return { status: 202, json: { creator_id: creator.id, scan_id: scanId } };
+        return { status: 202, json: { creator_id: creator.id, scan_id: scanId, creator: creatorJson(creator) } };
       }
       return err(405, "method not allowed");
     }
@@ -1182,6 +1268,12 @@ export function mockRoute(req: MockRequest): MockResponse {
           .sort((a, b2) => b2.id - a.id)[0];
         const detail: CreatorDetail = { ...creatorJson(creator), last_scan: last ? scanRunJson(last) : null };
         return ok(detail);
+      }
+      if (method === "PATCH") {
+        // 契约 v1.4:{alias?, group?};null/空串 = 清除 → {ok, alias, group}
+        if (b.alias !== undefined) creator.alias = optionalTextOf(b.alias);
+        if (b.group !== undefined) creator.group_name = optionalTextOf(b.group);
+        return ok({ ok: true, alias: creator.alias, group: creator.group_name });
       }
       if (method === "DELETE") {
         const removedWorkIds = new Set(
@@ -1262,12 +1354,19 @@ export function mockRoute(req: MockRequest): MockResponse {
       const creatorId = num(b.creator_id, 0);
       const q = str(b.q).trim().toLowerCase();
       const cid = optNum(b.collection_id);
+      // 契约 v1.4b:exclude 为 JSON 数组,与列表语义一致(exclude 优先)
+      const excludeIds = Array.isArray(b.exclude_collection_ids)
+        ? b.exclude_collection_ids.map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0)
+        : [];
       const type = str(b.type);
       const dl = str(b.dl);
       const latest = latestJobByWork();
-      const ids = state.works
-        .filter((w) => w.creator_id === creatorId)
-        .filter((w) => (cid !== undefined ? w.collection_id === cid : true))
+      let pool = state.works.filter((w) => w.creator_id === creatorId);
+      if (excludeIds.length > 0) {
+        pool = pool.filter((w) => w.collection_id === null || !excludeIds.includes(w.collection_id));
+      }
+      const ids = pool
+        .filter((w) => (cid !== undefined && excludeIds.length === 0 ? w.collection_id === cid : true))
         .filter((w) => (q ? w.title.toLowerCase().includes(q) || w.item_id.toLowerCase().includes(q) : true))
         .filter((w) => matchesTypeDl(w, type, dl, latest))
         .map((w) => w.id);
