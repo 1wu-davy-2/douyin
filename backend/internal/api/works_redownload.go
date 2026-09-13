@@ -20,9 +20,9 @@ type worksRedownloadRequest struct {
 }
 
 type worksRedownloadResult struct {
-	Enqueued    []int64           `json:"enqueued"`
-	Skipped     []batchDeleteSkip `json:"skipped"`
-	FreedBytes  int64             `json:"freed_bytes"`
+	Enqueued   []int64           `json:"enqueued"`
+	Skipped    []batchDeleteSkip `json:"skipped"`
+	FreedBytes int64             `json:"freed_bytes"`
 }
 
 func (s *Server) handleWorksRedownload(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +103,10 @@ func (s *Server) purgeWorkDownloads(workID int64, freed *int64, skipped *[]batch
 		*skipped = append(*skipped, batchDeleteSkip{workID, "query assets: " + err.Error()})
 		return false
 	}
-	type fileRef struct{ path string; size int64 }
+	type fileRef struct {
+		path string
+		size int64
+	}
 	files := []fileRef{}
 	for rows.Next() {
 		var f fileRef

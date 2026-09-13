@@ -120,14 +120,14 @@ type Scanner struct {
 // in-flight scans can finalize (status=failed) before the database closes.
 func New(baseCtx context.Context, src ProviderSource, handle *sql.DB, bus *events.Bus, store *settings.Store) *Scanner {
 	return &Scanner{
-		src:     src,
-		db:      handle,
-		bus:     bus,
-		store:   store,
+		src:        src,
+		db:         handle,
+		bus:        bus,
+		store:      store,
 		baseCtx:    baseCtx,
 		scanWakeup: make(chan struct{}, 1),
 		active:     make(map[int64]*activeScan),
-		sleep:   sleepCtx,
+		sleep:      sleepCtx,
 	}
 }
 

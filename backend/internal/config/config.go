@@ -27,10 +27,10 @@ import (
 
 // Settings is the resolved process configuration.
 type Settings struct {
-	Port    int    // DY_PORT
-	DataDir string // DY_DATA_DIR
+	Port         int    // DY_PORT
+	DataDir      string // DY_DATA_DIR
 	DownloadRoot string // DY_DOWNLOAD_ROOT (empty -> <data_dir>/downloads)
-	Mock    bool   // DY_MOCK
+	Mock         bool   // DY_MOCK
 
 	SidecarPort        int           // DY_SIDECAR_PORT
 	SidecarPython      string        // DY_SIDECAR_PYTHON (resolved)

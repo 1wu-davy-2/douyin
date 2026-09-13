@@ -187,7 +187,7 @@ func (s *Server) handleCreatorMoveDownloads(w http.ResponseWriter, r *http.Reque
 	}
 	roots = append(roots,
 		filepath.Join(dataDir, "downloads"), // default root
-		dataDir, // last resort (historical relative rows)
+		dataDir,                             // last resort (historical relative rows)
 	)
 
 	res := moveDownloadsResult{FailedFiles: []moveFileFailure{}}
