@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"douyin/backend/internal/downloader"
@@ -159,7 +160,7 @@ func (s *Server) knownDownloadRoots(creatorRoot string) []string {
 		if global := s.deps.Store.DownloadRoot(context.Background()); global != "" {
 			roots = append(roots, global)
 		}
-		roots = append(roots, s.deps.Store.DefaultDownloadsRoot())
+		roots = append(roots, s.deps.Store.DefaultDownloadRoot())
 	}
 	if dataDir, err := filepath.Abs(s.deps.Cfg.DataDir); err == nil {
 		roots = append(roots, dataDir)
@@ -169,16 +170,26 @@ func (s *Server) knownDownloadRoots(creatorRoot string) []string {
 
 // cleanupEmptyDirs removes now-empty directories from dir upward, walking only
 // INSIDE the managed roots (roots themselves are kept) and stopping at the
-// first non-empty directory.
+// first non-empty directory. Prefix matching is case-insensitive on Windows
+// (NTFS) and case-sensitive elsewhere (ext4 is case-sensitive; a lowercase
+// compare there could wrongly traverse a sibling directory that only differs
+// in case).
 func (s *Server) cleanupEmptyDirs(dir string, roots []string) {
+	fold := runtime.GOOS == "windows"
+	lower := func(p string) string {
+		if fold {
+			return strings.ToLower(p)
+		}
+		return p
+	}
 	cleanRoots := make([]string, 0, len(roots))
 	for _, root := range roots {
 		if strings.TrimSpace(root) == "" {
 			continue
 		}
-		cleanRoots = append(cleanRoots, strings.ToLower(strings.TrimSuffix(filepath.ToSlash(filepath.Clean(root)), "/"))+"/")
+		cleanRoots = append(cleanRoots, lower(strings.TrimSuffix(filepath.ToSlash(filepath.Clean(root)), "/"))+"/")
 	}
-	cur := strings.ToLower(strings.TrimSuffix(filepath.ToSlash(filepath.Clean(dir)), "/")) + "/"
+	cur := lower(strings.TrimSuffix(filepath.ToSlash(filepath.Clean(dir)), "/")) + "/"
 	for {
 		inside := false
 		for _, rc := range cleanRoots {

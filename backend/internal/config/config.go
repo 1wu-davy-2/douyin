@@ -4,6 +4,7 @@
 //
 //	DY_PORT                 HTTP listen port (default 8787)
 //	DY_DATA_DIR             data directory (default ./data)
+//	DY_DOWNLOAD_ROOT        default download root (runtime setting may override)
 //	DY_MOCK                 "1" -> use the built-in Go mock provider
 //	DY_SIDECAR_PORT         sidecar listen port (default 18787)
 //	DY_SIDECAR_PYTHON       python executable for the sidecar;
@@ -16,20 +17,19 @@ package config
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// venvPython is the sidecar venv interpreter layout created for this project
-// (see sidecar/requirements.txt / sidecar/.venv).
-const venvPython = "sidecar/.venv/Scripts/python.exe"
-
 // Settings is the resolved process configuration.
 type Settings struct {
 	Port    int    // DY_PORT
 	DataDir string // DY_DATA_DIR
+	DownloadRoot string // DY_DOWNLOAD_ROOT (empty -> <data_dir>/downloads)
 	Mock    bool   // DY_MOCK
 
 	SidecarPort        int           // DY_SIDECAR_PORT
@@ -44,6 +44,7 @@ func Load() Settings {
 	s := Settings{
 		Port:               envInt("DY_PORT", 8787),
 		DataDir:            envNonEmpty("DY_DATA_DIR", "./data"),
+		DownloadRoot:       envNonEmpty("DY_DOWNLOAD_ROOT", ""),
 		Mock:               envBool("DY_MOCK"),
 		SidecarPort:        envInt("DY_SIDECAR_PORT", 18787),
 		SidecarPython:      strings.TrimSpace(os.Getenv("DY_SIDECAR_PYTHON")),
@@ -58,14 +59,42 @@ func Load() Settings {
 
 	if s.SidecarPython == "" {
 		// Auto-detect the project venv interpreter (cwd is the repo root per
-		// project convention); fall back to whatever "python" resolves to.
-		if _, err := os.Stat(venvPython); err == nil {
-			s.SidecarPython = venvPython
-		} else {
-			s.SidecarPython = "python"
+		// project convention); fall back to whatever "python3"/"python"
+		// resolves to. Windows venvs use Scripts/python.exe, POSIX use
+		// bin/python.
+		for _, candidate := range venvPythonCandidates() {
+			if _, err := os.Stat(candidate); err == nil {
+				s.SidecarPython = candidate
+				break
+			}
+		}
+		if s.SidecarPython == "" {
+			s.SidecarPython = defaultPython()
 		}
 	}
 	return s
+}
+
+// venvPythonCandidates lists the venv interpreter layouts per platform, most
+// specific first (Windows "Scripts/python.exe", POSIX "bin/python3"/"bin/python").
+func venvPythonCandidates() []string {
+	if runtime.GOOS == "windows" {
+		return []string{filepath.Join("sidecar", ".venv", "Scripts", "python.exe")}
+	}
+	return []string{
+		filepath.Join("sidecar", ".venv", "bin", "python3"),
+		filepath.Join("sidecar", ".venv", "bin", "python"),
+	}
+}
+
+func defaultPython() string {
+	if runtime.GOOS != "windows" {
+		// Prefer python3 on POSIX distros where bare "python" may not exist.
+		if _, err := exec.LookPath("python3"); err == nil {
+			return "python3"
+		}
+	}
+	return "python"
 }
 
 func envNonEmpty(key, def string) string {

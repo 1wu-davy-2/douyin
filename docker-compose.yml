@@ -1,0 +1,28 @@
+services:
+  douyin:
+    build: .
+    container_name: douyin-archive
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./data:/app/data
+    environment:
+      DY_PORT: "8787"
+      DY_DATA_DIR: /app/data
+      DY_SIDECAR_PYTHON: python3
+      # 下载根目录(容器内路径;配合 volume 持久化)。留空 = /app/data/downloads
+      # 也可挂载宿主机目录后指向它,例如:
+      #   volumes: - /mnt/media/douyin:/media/douyin
+      #   DY_DOWNLOAD_ROOT: /media/douyin
+      # DY_DOWNLOAD_ROOT: ""
+    restart: unless-stopped
+
+  # 可选:本地 MinIO(配合设置页的 MinIO 同步,尚未启用)
+  # minio:
+  #   image: minio/minio
+  #   command: server /data --console-address ":9001"
+  #   ports: ["9000:9000", "9001:9001"]
+  #   volumes: ["./minio-data:/data"]
+  #   environment:
+  #     MINIO_ROOT_USER: minioadmin
+  #     MINIO_ROOT_PASSWORD: minioadmin

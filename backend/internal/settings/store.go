@@ -114,11 +114,21 @@ func (s *Store) DefaultDownloadsRoot() string {
 	return filepath.Join(s.cfg.DataDir, "downloads")
 }
 
-// EffectiveDownloadRoot resolves the global download root: the stored
-// download_root when set, else <data_dir>/downloads.
+// EffectiveDownloadRoot resolves the global download root, highest priority
+// first: the runtime stored download_root, then the DY_DOWNLOAD_ROOT env
+// (convenient for Docker), else <data_dir>/downloads.
 func (s *Store) EffectiveDownloadRoot(ctx context.Context) string {
 	if root := s.DownloadRoot(ctx); root != "" {
 		return root
+	}
+	return s.DefaultDownloadRoot()
+}
+
+// DefaultDownloadRoot is the fallback root when no global override exists:
+// the DY_DOWNLOAD_ROOT env when set, else <data_dir>/downloads.
+func (s *Store) DefaultDownloadRoot() string {
+	if s.cfg.DownloadRoot != "" {
+		return s.cfg.DownloadRoot
 	}
 	return s.DefaultDownloadsRoot()
 }
