@@ -17,6 +17,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "../api/client";
@@ -33,6 +34,7 @@ import {
   setCreatorDownloadRoot,
   updateSubscription,
   worksRedownload,
+  deleteCreator,
 } from "../api/endpoints";
 import { qk, useCollections, useCreators, useSettings, useSubscriptions, useWorks } from "../api/queries";
 import type {
@@ -290,6 +292,23 @@ export function LibraryPage() {
     onError: (e) => toast.error("创建下载任务失败", { description: e.message }),
   });
 
+  // ---------- 删除博主 ----------
+  const deleteCreatorMut = useMutation({
+    mutationFn: (v: { id: number; deleteFiles: boolean }) =>
+      deleteCreator(v.id, v.deleteFiles),
+    onSuccess: (_r, v) => {
+      const name = creatorList.find((c) => c.id === v.id)?.alias
+        ?? creatorList.find((c) => c.id === v.id)?.nickname ?? "博主";
+      toast.success(`已删除 ${name}`, {
+        description: v.deleteFiles ? "作品记录与已下载文件已一并删除" : "作品记录已删除,已下载文件保留",
+      });
+      setDeleteTarget(null);
+      void queryClient.invalidateQueries({ queryKey: ["creators"] });
+      void queryClient.invalidateQueries({ queryKey: qk.subscriptions });
+    },
+    onError: (e) => toast.error("删除博主失败", { description: e.message }),
+  });
+
   // ---------- 重新扫描 ----------
   const rescanMut = useMutation({
     mutationFn: (id: number) => rescanCreator(id, true),
@@ -339,6 +358,8 @@ export function LibraryPage() {
   const [renameOpen, setRenameOpen] = useState(false);
   /** 详情标题行"监控"快捷入口(添加/管理该博主的 creator 级订阅)。 */
   const [monitorOpen, setMonitorOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Creator | null>(null);
+  const [deleteFiles, setDeleteFiles] = useState(false);
   const selectedCreatorSub = selectedCreator ? subByCreator.get(selectedCreator.id) ?? null : null;
 
   // ---------- 渲染 ----------
@@ -398,6 +419,8 @@ export function LibraryPage() {
               onClick={() => setSelectedCreatorId(c.id)}
               onRescan={() => rescanMut.mutate(c.id)}
               rescanPending={rescanMut.isPending && rescanMut.variables === c.id}
+              onDelete={() => setDeleteTarget(c)}
+              deletePending={deleteCreatorMut.isPending}
             />
           ))
         ) : (
@@ -429,6 +452,8 @@ export function LibraryPage() {
                         onClick={() => setSelectedCreatorId(c.id)}
                         onRescan={() => rescanMut.mutate(c.id)}
                         rescanPending={rescanMut.isPending && rescanMut.variables === c.id}
+                        onDelete={() => setDeleteTarget(c)}
+                        deletePending={deleteCreatorMut.isPending}
                       />
                     ))}
                 </div>
@@ -446,6 +471,8 @@ export function LibraryPage() {
                     onClick={() => setSelectedCreatorId(c.id)}
                     onRescan={() => rescanMut.mutate(c.id)}
                     rescanPending={rescanMut.isPending && rescanMut.variables === c.id}
+                    onDelete={() => setDeleteTarget(c)}
+                    deletePending={deleteCreatorMut.isPending}
                   />
                 ))}
               </div>
@@ -656,6 +683,28 @@ export function LibraryPage() {
         loading={deleteMut.isPending}
         onConfirm={() => deleteMut.mutate([...selected])}
       />
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(o) => (o ? undefined : setDeleteTarget(null))}
+        title={`删除博主「${deleteTarget ? (deleteTarget.alias ?? deleteTarget.nickname) : ""}」?`}
+        description="将删除该博主的作品记录、合集、下载任务与订阅。可在下方选择是否同时删除已下载的视频/图片文件。"
+        confirmLabel="删除"
+        destructive
+        loading={deleteCreatorMut.isPending}
+        onConfirm={() => {
+          if (deleteTarget) deleteCreatorMut.mutate({ id: deleteTarget.id, deleteFiles });
+        }}
+      >
+        <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+          <Checkbox
+            checked={deleteFiles}
+            onCheckedChange={(v) => setDeleteFiles(v === true)}
+            aria-label="同时删除已下载文件"
+          />
+          同时删除已下载文件({formatBytes(deleteTarget?.download_bytes ?? 0)})
+          <span className="text-xs text-muted-foreground">不勾选则文件保留在磁盘</span>
+        </label>
+      </ConfirmDialog>
     </div>
   );
 }
@@ -669,6 +718,8 @@ function CreatorCard({
   onClick,
   onRescan,
   rescanPending,
+  onDelete,
+  deletePending,
 }: {
   creator: { id: number; nickname: string; alias: string | null; group: string | null; avatar_url: string; works_count: number; downloaded_count: number; download_bytes: number };
   active: boolean;
@@ -678,6 +729,8 @@ function CreatorCard({
   onClick: () => void;
   onRescan: () => void;
   rescanPending: boolean;
+  onDelete: () => void;
+  deletePending: boolean;
 }) {
   const scanning = Boolean(live?.running);
   const displayName = creator.alias ?? creator.nickname;
@@ -743,6 +796,20 @@ function CreatorCard({
           }}
         >
           <RotateCcw className={cn("size-3.5", (scanning || rescanPending) && "animate-spin")} />
+        </Button>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
+          title="删除该博主(可选择是否同时删除已下载文件)"
+          disabled={deletePending}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+        >
+          <Trash2 className="size-3.5" />
         </Button>
       </div>
 

@@ -75,7 +75,8 @@ export const getCreator = (id: number) => api<CreatorDetail>(`/api/creators/${id
 /** 契约 v1.4:改别名/分组;null 或空串 = 清除(别名恢复默认昵称,分组移出)。 */
 export const patchCreator = (id: number, patch: CreatorPatch) =>
   api<CreatorPatchResult>(`/api/creators/${id}`, { method: "PATCH", json: patch });
-export const deleteCreator = (id: number) => api<{ ok: boolean }>(`/api/creators/${id}`, { method: "DELETE" });
+export const deleteCreator = (id: number, deleteFiles = false) =>
+  api<{ ok: boolean }>(`/api/creators/${id}${deleteFiles ? "?delete_files=true" : ""}`, { method: "DELETE" });
 /** 契约 v1.3:设置博主独立下载根目录;path=null 表示清除,跟随全局。后端自动建目录。 */
 export const setCreatorDownloadRoot = (id: number, path: string | null) =>
   api<CreatorDownloadRootResult>(`/api/creators/${id}/download-root`, { method: "PATCH", json: { path } });

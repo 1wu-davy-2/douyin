@@ -26,7 +26,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -506,19 +509,42 @@ func (s *Server) handlePatchCreator(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleDeleteCreator DELETE /api/creators/{id} — removes the creator and its
-// works/collections/jobs/subscriptions (downloaded files stay). Refused while
+// handleDeleteCreator DELETE /api/creators/{id}?delete_files=true — removes
+// the creator and its works/collections/jobs/subscriptions. With
+// delete_files=true the downloaded files referenced by assets are deleted
+// first (missing files tolerated); default keeps files on disk. Refused while
 // a scan of this creator is in flight.
 func (s *Server) handleDeleteCreator(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	if !ok {
 		return
 	}
+	deleteFiles := r.URL.Query().Get("delete_files") == "true"
 	if s.deps.Scanner != nil && s.deps.Scanner.IsScanning(id) {
 		writeError(w, http.StatusConflict, "creator is being scanned, try again later")
 		return
 	}
 	ctx := r.Context()
+
+	// delete_files 模式:事务前先收集该博主全部资产路径(事务会删 assets 行),
+	// legacy junction 下的路径由 deleteFilesIfOurs 跳过(旧项目只读存档)。
+	var filePaths []string
+	if deleteFiles {
+		rows, qerr := s.deps.DB.QueryContext(ctx,
+			`SELECT path FROM assets WHERE work_id IN (SELECT id FROM works WHERE creator_id = ?)`, id)
+		if qerr != nil {
+			writeInternalError(w, qerr)
+			return
+		}
+		for rows.Next() {
+			var p string
+			if err := rows.Scan(&p); err == nil {
+				filePaths = append(filePaths, p)
+			}
+		}
+		rows.Close()
+	}
+
 	err := db.WithTx(ctx, s.deps.DB, func(tx *sql.Tx) error {
 		var exists bool
 		if err := tx.QueryRowContext(ctx,
@@ -550,8 +576,37 @@ func (s *Server) handleDeleteCreator(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeInternalError(w, err)
 	default:
+		// 文件删除放在事务提交之后:失败只记日志,不影响记录删除。
+		if deleteFiles {
+			removed, failed := s.deleteFilesIfOurs(filePaths)
+			log.Printf("[creators] delete %d: files removed=%d failed=%d", id, removed, failed)
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}
+}
+
+// deleteFilesIfOurs removes files whose stored paths were collected before the
+// creator deletion tx. legacy-junction paths (…/downloads/legacy/…) are
+// skipped: the old project's archive is read-only by contract.
+func (s *Server) deleteFilesIfOurs(paths []string) (removed, failed int) {
+	legacyMark := "/downloads/legacy/"
+	for _, stored := range paths {
+		full := resolveAssetPath(s.deps.Cfg.DataDir, stored)
+		norm := filepath.ToSlash(full)
+		if strings.Contains(norm, legacyMark) {
+			continue
+		}
+		if err := os.Remove(full); err != nil {
+			if os.IsNotExist(err) {
+				removed++
+				continue
+			}
+			failed++
+			continue
+		}
+		removed++
+	}
+	return removed, failed
 }
 
 // handleRescanCreator POST /api/creators/{id}/rescan {full?:bool} -> 202

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 import {
   Dialog,
@@ -18,6 +19,8 @@ interface ConfirmDialogProps {
   destructive?: boolean;
   loading?: boolean;
   onConfirm: () => void;
+  /** 可选自定义内容(渲染在描述与按钮之间,如附加复选框) */
+  children?: ReactNode;
 }
 
 export function ConfirmDialog({
@@ -29,6 +32,7 @@ export function ConfirmDialog({
   destructive = false,
   loading = false,
   onConfirm,
+  children,
 }: ConfirmDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -37,6 +41,7 @@ export function ConfirmDialog({
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}
         </DialogHeader>
+        {children ? <div className="mb-2">{children}</div> : null}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>
             取消
