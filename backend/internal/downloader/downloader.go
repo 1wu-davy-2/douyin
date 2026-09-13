@@ -102,6 +102,9 @@ type Deps struct {
 	Workers int
 	// Mock disables inter-job pacing (mock CDN needs no rate limiting).
 	Mock bool
+	// DownloadLimitGB caps total downloaded size across all assets (0 =
+	// unlimited). Over the limit, queued jobs stay queued until resumed.
+	DownloadLimitGB int
 	// Uploader receives the produced files of succeeded jobs for MinIO sync
 	// (docs/MINIO_PLAN.md option A). May be nil (sync not wired / tests).
 	// Strictly fire-and-forget: the hook runs after the job is already
@@ -121,6 +124,8 @@ type Downloader struct {
 	workers  int
 	mock     bool
 	uploader *uploader.Uploader
+	limitGB  int
+	limitOnce sync.Once
 
 	baseCtx   context.Context
 	cancelAll context.CancelFunc
@@ -303,6 +308,13 @@ func (d *Downloader) Stop(timeout time.Duration) {
 func (d *Downloader) worker() {
 	defer d.wg.Done()
 	for id := range d.q.ch {
+		// Download-size cap (contract v1.5): over the limit the job is sent
+		// back to queued and retried on the next resume cycle, so raising the
+		// limit resumes it without losing its place.
+		if d.overLimit() {
+			d.requeueForLimit(id)
+			continue
+		}
 		// Gentle pacing: douyin throttles bursts of detail+CDN requests with
 		// transient 403s; a small stagger between job starts avoids the wave.
 		if !d.mock {
@@ -310,6 +322,33 @@ func (d *Downloader) worker() {
 		}
 		d.runJob(id)
 	}
+}
+
+// overLimit reports whether the configured download-size cap is reached
+// (DY_DOWNLOAD_LIMIT_GB; 0 = unlimited). DB errors never block downloads.
+func (d *Downloader) overLimit() bool {
+	if d.limitGB <= 0 {
+		return false
+	}
+	var used sql.NullInt64
+	if err := d.db.QueryRow(`SELECT SUM(size_bytes) FROM assets WHERE kind IN ('video','image')`).Scan(&used); err != nil {
+		return false
+	}
+	return used.Valid && used.Int64 >= int64(d.limitGB)<<30
+}
+
+// requeueForLimit pushes an over-limit job back to queued and logs once per
+// wave (not once per job).
+func (d *Downloader) requeueForLimit(id int64) {
+	if _, err := d.db.Exec(
+		`UPDATE download_jobs SET status = ? WHERE id = ? AND status = ?`,
+		StatusQueued, id, StatusQueued); err != nil {
+		log.Printf("[downloader] job %d: limit requeue failed: %v", id, err)
+		return
+	}
+	d.limitOnce.Do(func() {
+		log.Printf("[downloader] download limit reached (%d GB): jobs stay queued; raise DY_DOWNLOAD_LIMIT_GB or free space to resume", d.limitGB)
+	})
 }
 
 // feedQueued re-feeds every queued job id (startup / resume). Runs in the

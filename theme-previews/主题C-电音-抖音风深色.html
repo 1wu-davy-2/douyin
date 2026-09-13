@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>主题预览 C · 电音(抖音风深色)</title>
+<style>
+/* ============================================================
+   主题 C「电音」— 深蓝紫底 + 抖音品牌色(粉 #FE2C55 / 青 #25F4EE)
+   说明:变量名与 frontend/src/index.css 完全一致,
+   选定后把 :root 变量直接搬回 index.css 即可。
+   底色带蓝紫色调,不是纯黑。
+   ============================================================ */
+:root {
+  --radius: 0.625rem;
+
+  --background: #1f1c29;          /* 深蓝紫夜色 */
+  --foreground: #eceaf4;
+  --card: #272336;
+  --card-foreground: #eceaf4;
+  --popover: #2c2840;
+  --popover-foreground: #eceaf4;
+  --primary: #fe3b64;             /* 抖音粉 */
+  --primary-foreground: #ffffff;
+  --secondary: #35304b;
+  --secondary-foreground: #eceaf4;
+  --muted: #332e48;
+  --muted-foreground: #a49ec2;
+  --accent: #3a3454;
+  --accent-foreground: #f0eef8;
+  --destructive: #f87070;
+  --destructive-foreground: #ffffff;
+  --border: rgb(255 255 255 / 10%);
+  --input: rgb(255 255 255 / 15%);
+  --ring: #fe3b64;
+
+  /* 徽章 / 语义色(青色取自抖音品牌青) */
+  --info: #40d8d2;
+  --success: #68d99b;
+  --warning: #eeb457;
+  --scrollbar: rgb(255 255 255 / 16%);
+  --tab-active: var(--background);
+}
+
+* { box-sizing: border-box; }
+html { color-scheme: dark; }
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar) transparent; }
+
+.ic { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+
+/* ---------- 主题标识角标(仅预览用,不属于主题) ---------- */
+.theme-chip {
+  position: fixed; top: 12px; right: 14px; z-index: 50;
+  background: var(--popover); color: var(--popover-foreground);
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 5px 14px; font-size: 12px; font-weight: 600; letter-spacing: .02em;
+  box-shadow: 0 4px 16px rgb(0 0 0 / .3);
+}
+.theme-chip small { font-weight: 400; color: var(--muted-foreground); margin-left: 6px; }
+
+/* ---------- 外壳 ---------- */
+.app { display: flex; height: 100dvh; }
+aside {
+  width: 224px; flex-shrink: 0; display: flex; flex-direction: column;
+  border-right: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--card) 40%, transparent);
+}
+.logo { display: flex; align-items: center; gap: 10px; padding: 16px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.logo-badge {
+  width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary);
+}
+.logo-badge .ic { width: 18px; height: 18px; }
+.logo-tt { line-height: 1.25; }
+.logo-tt b { display: block; font-size: 14px; }
+.logo-tt span { font-size: 11px; color: var(--muted-foreground); }
+
+nav { flex: 1; padding: 8px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  border-radius: 6px; font-size: 13.5px; font-weight: 500;
+  color: var(--muted-foreground); text-decoration: none; transition: background .15s, color .15s;
+}
+.nav-item:hover { background: var(--accent); color: var(--accent-foreground); }
+.nav-item.active { background: var(--accent); color: var(--accent-foreground); }
+
+.user { display: flex; align-items: center; gap: 8px; padding: 12px; border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.avatar {
+  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+  background: var(--secondary); color: var(--secondary-foreground);
+  font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center;
+}
+.user .name { flex: 1; font-size: 12px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.icon-btn {
+  width: 32px; height: 32px; border-radius: 6px; border: none; background: transparent;
+  color: var(--foreground); display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.icon-btn:hover { background: var(--accent); }
+
+main { flex: 1; min-width: 0; overflow-y: auto; }
+.page { max-width: 1152px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+
+/* ---------- 卡片 / 统计 ---------- */
+.card {
+  background: var(--card); color: var(--card-foreground);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 1px 2px rgb(0 0 0 / .12);
+}
+.grid5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+.stat { padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; cursor: pointer; }
+.stat .lbl { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--muted-foreground); }
+.stat .num { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.stat.active { box-shadow: inset 0 0 0 1px var(--ring); }
+.stat .num.tone-destructive { color: var(--destructive); }
+.stat .num.tone-success { color: var(--success); }
+.pause-card { padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pause-card p { margin: 0; font-size: 13.5px; font-weight: 500; }
+.pause-card small { font-size: 11px; color: var(--muted-foreground); }
+
+/* ---------- 开关 ---------- */
+.switch {
+  width: 36px; height: 20px; border-radius: 999px; flex-shrink: 0;
+  background: var(--input); border: none; position: relative; cursor: pointer; transition: background .15s;
+}
+.switch::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--background); box-shadow: 0 1px 2px rgb(0 0 0 / .4); transition: left .15s;
+}
+.switch.on { background: var(--primary); }
+.switch.on::after { left: 19px; }
+
+/* ---------- Tabs ---------- */
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.tabs { display: inline-flex; height: 36px; align-items: center; padding: 4px; gap: 4px; background: var(--muted); border-radius: 10px; color: var(--muted-foreground); }
+.tab { padding: 4px 12px; border-radius: 6px; font-size: 13px; font-weight: 500; display: flex; align-items: center; }
+.tab.active { background: var(--tab-active); color: var(--foreground); box-shadow: 0 1px 2px rgb(0 0 0 / .25); }
+.toolbar-right { display: flex; align-items: center; gap: 8px; }
+.count-hint { font-size: 12px; color: var(--muted-foreground); }
+.count-hint b { color: var(--foreground); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+/* ---------- 按钮 ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 36px; padding: 0 16px; border: none; border-radius: 6px;
+  font-family: inherit; font-size: 13.5px; font-weight: 500; cursor: default;
+  white-space: nowrap; transition: background .15s;
+}
+.btn.sm { height: 32px; padding: 0 12px; font-size: 12px; }
+.btn.primary { background: var(--primary); color: var(--primary-foreground); box-shadow: 0 1px 2px rgb(0 0 0 / .25); }
+.btn.secondary { background: var(--secondary); color: var(--secondary-foreground); }
+.btn.outline { background: transparent; border: 1px solid var(--border); color: var(--foreground); }
+.btn.outline:hover { background: var(--accent); }
+.btn.ghost { background: transparent; color: var(--foreground); }
+.btn.ghost:hover { background: var(--accent); }
+.btn.destructive { background: var(--destructive); color: var(--destructive-foreground); box-shadow: 0 1px 2px rgb(0 0 0 / .25); }
+.btn.disabled { opacity: .5; pointer-events: none; }
+
+/* ---------- 徽章 ---------- */
+.badge {
+  display: inline-flex; align-items: center; gap: 4px; width: fit-content;
+  border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 500;
+}
+.badge.info { background: color-mix(in srgb, var(--info) 15%, transparent); color: var(--info); }
+.badge.success { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
+.badge.warning { background: color-mix(in srgb, var(--warning) 15%, transparent); color: var(--warning); }
+.badge.destructive { background: color-mix(in srgb, var(--destructive) 15%, transparent); color: var(--destructive); }
+.badge.mutedb { background: var(--muted); color: var(--muted-foreground); }
+.badge.default { background: var(--primary); color: var(--primary-foreground); }
+
+/* ---------- 表格 ---------- */
+.tbl-card { overflow: hidden; }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+th { text-align: left; font-weight: 500; font-size: 12px; color: var(--muted-foreground); padding: 10px 8px; border-bottom: 1px solid var(--border); }
+td { padding: 12px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; vertical-align: middle; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: color-mix(in srgb, var(--muted) 50%, transparent); }
+tbody tr.selected { background: var(--muted); }
+.work-tt { font-weight: 500; }
+.work-sub { font-size: 12px; color: var(--muted-foreground); margin-top: 2px; }
+.num-cell { font-variant-numeric: tabular-nums; }
+
+/* 复选框 */
+.cb {
+  width: 16px; height: 16px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--input); background: transparent; vertical-align: middle;
+}
+.cb.on { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
+.cb .ic { width: 12px; height: 12px; stroke-width: 3; }
+
+/* 进度条 */
+.prog { display: flex; flex-direction: column; gap: 6px; min-width: 190px; }
+.prog-track { height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--primary) 18%, transparent); overflow: hidden; }
+.prog-fill { height: 100%; border-radius: 999px; background: var(--primary); }
+.prog-meta { font-size: 12px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+
+/* ---------- 组件速览 ---------- */
+.gallery { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.gallery h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.gallery-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.gallery-label { font-size: 11px; color: var(--muted-foreground); width: 56px; flex-shrink: 0; }
+.input {
+  height: 36px; width: 260px; border-radius: 6px; border: 1px solid var(--input);
+  background: transparent; padding: 0 12px; font-size: 13.5px; color: var(--foreground); font-family: inherit;
+}
+.input::placeholder { color: var(--muted-foreground); }
+.input:focus { outline: none; border-color: var(--ring); }
+</style>
+</head>
+<body>
+<div class="theme-chip">主题 C · 电音<small>抖音粉青 · 深蓝紫夜色</small></div>
+
+<div class="app">
+  <aside>
+    <div class="logo">
+      <span class="logo-badge">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"/><path d="m6.2 5.3 3.1 3.9"/><path d="m12.4 3.4 3.1 4"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
+      </span>
+      <div class="logo-tt">
+        <b>抖音归档工具</b>
+        <span>v2 · 本地归档</span>
+      </div>
+    </div>
+    <nav>
+      <a class="nav-item" href="javascript:void 0"><svg class="ic" viewBox="0 0 24 24"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>作品库</a>
+      <a class="nav-item active" href="javascript:void 0"><svg class="ic" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>下载</a>
+      <a class="nav-item" href="javascript:void 0"><svg class="ic" viewBox="0 0 24 24"><path d="M19.07 4.93A10 10 0 0 0 6.99 3.34"/><path d="M4 6h.01"/><path d="M2.29 9.62a10 10 0 1 0 19.02-1.27"/><path d="M16.24 7.76a6 6 0 1 0-8.01 8.91"/><path d="M12 18h.01"/><path d="M17.99 11.66a6 6 0 0 1-2.22 4.58"/><circle cx="12" cy="12" r="2"/><path d="m13.41 10.59 5.66-5.66"/></svg>监控</a>
+      <a class="nav-item" href="javascript:void 0"><svg class="ic" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>设置</a>
+    </nav>
+    <div class="user">
+      <span class="avatar">W</span>
+      <span class="name">ww</span>
+      <button class="icon-btn" title="登出"><svg class="ic" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg></button>
+    </div>
+  </aside>
+
+  <main>
+    <div class="page">
+      <!-- 统计卡行 -->
+      <div class="grid5">
+        <div class="card stat">
+          <span class="lbl"><svg class="ic" viewBox="0 0 24 24"><line x1="10" x2="14" y1="2" y2="2"/><line x1="12" x2="15" y1="14" y2="11"/><circle cx="12" cy="14" r="8"/></svg>排队</span>
+          <span class="num">1</span>
+        </div>
+        <div class="card stat active">
+          <span class="lbl"><svg class="ic" viewBox="0 0 24 24"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M12 12v9"/><path d="m16 16-4-4-4 4"/></svg>进行中</span>
+          <span class="num">1</span>
+        </div>
+        <div class="card stat">
+          <span class="lbl"><svg class="ic" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>失败</span>
+          <span class="num tone-destructive">1</span>
+        </div>
+        <div class="card stat">
+          <span class="lbl"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>已完成</span>
+          <span class="num tone-success">36</span>
+        </div>
+        <div class="card pause-card">
+          <div>
+            <p>全局暂停</p>
+            <small>并发 3 · 暂停不影响进行中</small>
+          </div>
+          <button class="switch" aria-label="全局暂停/恢复"></button>
+        </div>
+      </div>
+
+      <!-- Tabs + 工具行 -->
+      <div class="toolbar">
+        <div class="tabs">
+          <span class="tab active">进行中(3)</span>
+          <span class="tab">失败(1)</span>
+          <span class="tab">已完成(36)</span>
+        </div>
+        <div class="toolbar-right">
+          <span class="count-hint">已选 <b>1</b> 条</span>
+          <button class="btn outline sm"><svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="m6 9 6 6 6-6"/></svg>批量操作</button>
+        </div>
+      </div>
+
+      <!-- 任务表 -->
+      <div class="card tbl-card">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:40px;padding-right:0"><span class="cb"></span></th>
+              <th>作品</th>
+              <th style="width:96px">状态</th>
+              <th style="width:224px">进度</th>
+              <th style="width:96px">速度</th>
+              <th style="width:144px">排队时间</th>
+              <th style="width:96px;text-align:right">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="selected">
+              <td style="padding-right:0"><span class="cb on"><svg class="ic" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span></td>
+              <td>
+                <div class="work-tt">城市街头美食图鉴 EP.12</div>
+                <div class="work-sub">@阿伟探店 · 1080P 高清</div>
+              </td>
+              <td><span class="badge info">下载中</span></td>
+              <td>
+                <div class="prog">
+                  <div class="prog-track"><div class="prog-fill" style="width:62%"></div></div>
+                  <span class="prog-meta">62% · 245.3 / 395.6 MB</span>
+                </div>
+              </td>
+              <td class="num-cell">12.4 MB/s</td>
+              <td class="num-cell">2026-09-13 02:15</td>
+              <td style="text-align:right"><button class="btn outline sm"><svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>取消</button></td>
+            </tr>
+            <tr>
+              <td style="padding-right:0"><span class="cb"></span></td>
+              <td>
+                <div class="work-tt">深夜食堂 VLOG · 夜市篇</div>
+                <div class="work-sub">@小厨日记 · 1080P 高清</div>
+              </td>
+              <td><span class="badge info">排队中</span></td>
+              <td>
+                <div class="prog">
+                  <div class="prog-track"><div class="prog-fill" style="width:0%"></div></div>
+                  <span class="prog-meta">0% · 等待中</span>
+                </div>
+              </td>
+              <td class="num-cell" style="color:var(--muted-foreground)">—</td>
+              <td class="num-cell">2026-09-13 02:18</td>
+              <td style="text-align:right"><button class="btn outline sm"><svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>取消</button></td>
+            </tr>
+            <tr>
+              <td style="padding-right:0"><span class="cb"></span></td>
+              <td>
+                <div class="work-tt">周末海边航拍 4K 合集</div>
+                <div class="work-sub">@飞行模式 · 4K 超清</div>
+              </td>
+              <td><span class="badge warning">已暂停</span></td>
+              <td>
+                <div class="prog">
+                  <div class="prog-track"><div class="prog-fill" style="width:34%"></div></div>
+                  <span class="prog-meta">34% · 112.8 / 331.9 MB</span>
+                </div>
+              </td>
+              <td class="num-cell" style="color:var(--muted-foreground)">—</td>
+              <td class="num-cell">2026-09-13 02:19</td>
+              <td style="text-align:right"><button class="btn outline sm"><svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>取消</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 组件速览 -->
+      <div class="card gallery">
+        <h3>组件速览</h3>
+        <div class="gallery-row">
+          <span class="gallery-label">按钮</span>
+          <button class="btn primary">默认操作</button>
+          <button class="btn secondary">次要</button>
+          <button class="btn outline"><svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>描边</button>
+          <button class="btn ghost">幽灵</button>
+          <button class="btn destructive"><svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>危险</button>
+          <button class="btn outline disabled">禁用</button>
+        </div>
+        <div class="gallery-row">
+          <span class="gallery-label">徽章</span>
+          <span class="badge info">排队中</span>
+          <span class="badge info">下载中</span>
+          <span class="badge warning">已暂停</span>
+          <span class="badge success">已完成</span>
+          <span class="badge destructive">失败</span>
+          <span class="badge mutedb">已取消</span>
+          <span class="badge default">默认</span>
+        </div>
+        <div class="gallery-row">
+          <span class="gallery-label">输入/开关</span>
+          <input class="input" placeholder="搜索作品标题或作者…" />
+          <button class="switch on" aria-label="示例开关开"></button>
+          <button class="switch" aria-label="示例开关关"></button>
+          <div class="prog" style="min-width:200px">
+            <div class="prog-track"><div class="prog-fill" style="width:70%"></div></div>
+            <span class="prog-meta">进度 70%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

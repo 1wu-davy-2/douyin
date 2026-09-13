@@ -5,6 +5,7 @@
 //	DY_PORT                 HTTP listen port (default 8787)
 //	DY_DATA_DIR             data directory (default ./data)
 //	DY_DOWNLOAD_ROOT        default download root (runtime setting may override)
+//	DY_DOWNLOAD_LIMIT_GB    total downloaded-size cap in GB; 0 = unlimited (default 20)
 //	DY_MOCK                 "1" -> use the built-in Go mock provider
 //	DY_SIDECAR_PORT         sidecar listen port (default 18787)
 //	DY_SIDECAR_PYTHON       python executable for the sidecar;
@@ -30,6 +31,7 @@ type Settings struct {
 	Port         int    // DY_PORT
 	DataDir      string // DY_DATA_DIR
 	DownloadRoot string // DY_DOWNLOAD_ROOT (empty -> <data_dir>/downloads)
+	DownloadLimitGB int // DY_DOWNLOAD_LIMIT_GB (0 = unlimited)
 	Mock         bool   // DY_MOCK
 
 	SidecarPort        int           // DY_SIDECAR_PORT
@@ -45,6 +47,7 @@ func Load() Settings {
 		Port:               envInt("DY_PORT", 8787),
 		DataDir:            envNonEmpty("DY_DATA_DIR", "./data"),
 		DownloadRoot:       envNonEmpty("DY_DOWNLOAD_ROOT", ""),
+		DownloadLimitGB:    envInt("DY_DOWNLOAD_LIMIT_GB", 20),
 		Mock:               envBool("DY_MOCK"),
 		SidecarPort:        envInt("DY_SIDECAR_PORT", 18787),
 		SidecarPython:      strings.TrimSpace(os.Getenv("DY_SIDECAR_PYTHON")),
