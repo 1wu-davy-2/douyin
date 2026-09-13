@@ -124,6 +124,56 @@ export function PlayerDialog() {
     if (autoNext && !isLast) next();
   };
 
+  // 幻灯片模式下上一条/下一条在"张"维度导航;仅在第一张/最后一张时跨作品。
+  const atFirstSlide = slideshow && slidePos <= 0;
+  const atLastSlide = slideshow && slidePos >= imageAssets.length - 1;
+  const prevDisabled = slideshow ? atFirstSlide && isFirst : isFirst;
+  const nextDisabled = slideshow ? atLastSlide && isLast : isLast;
+  const handlePrev = () => {
+    if (slideshow) {
+      if (slidePos > 0) {
+        setSlideIndex(slidePos - 1);
+        return;
+      }
+      if (isFirst) return;
+      prev(); // 上一个作品(切换后回到其第 1 张)
+      return;
+    }
+    prev();
+  };
+  const handleNext = () => {
+    if (slideshow) {
+      if (slidePos < imageAssets.length - 1) {
+        setSlideIndex(slidePos + 1);
+        return;
+      }
+      if (isLast) return;
+      next(); // 下一个作品
+      return;
+    }
+    next();
+  };
+
+  // ←/→ 键:幻灯片切图,视频切上一个/下一个作品
+  useEffect(() => {
+    if (!player.open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "ArrowLeft" && e.code !== "ArrowRight") return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)
+      ) {
+        return;
+      }
+      e.preventDefault();
+      if (e.code === "ArrowLeft") handlePrev();
+      else handleNext();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   /** mock 模式图片资产 path 即 SVG data URI(无二进制 content 端点);真实模式走支持 Range 的 content 端点。 */
   const imageSrc = (a: Asset): string => (MOCK && a.path.startsWith("data:") ? a.path : assetContentUrl(a.id));
 
@@ -194,11 +244,12 @@ export function PlayerDialog() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={prev}
-              disabled={isFirst}
+              onClick={handlePrev}
+              disabled={prevDisabled}
+              title={slideshow ? (atFirstSlide ? "已是本图集第一张,上一个作品" : "上一张") : "上一个作品"}
               className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2.5 text-xs transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-40"
             >
-              <ChevronLeft className="size-4" /> 上一条
+              <ChevronLeft className="size-4" /> {slideshow ? "上一张" : "上一条"}
             </button>
             <span className="min-w-14 text-center text-xs tabular-nums text-muted-foreground">
               {slideshow
@@ -209,11 +260,12 @@ export function PlayerDialog() {
             </span>
             <button
               type="button"
-              onClick={next}
-              disabled={isLast}
+              onClick={handleNext}
+              disabled={nextDisabled}
+              title={slideshow ? (atLastSlide ? "已是本图集最后一张,下一个作品" : "下一张") : "下一个作品"}
               className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2.5 text-xs transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-40"
             >
-              下一条 <ChevronRight className="size-4" />
+              {slideshow ? "下一张" : "下一条"} <ChevronRight className="size-4" />
             </button>
           </div>
 
@@ -242,8 +294,8 @@ export function PlayerDialog() {
 
         <div className="border-t border-border/60 px-4 py-2 text-[11px] text-muted-foreground/70">
           {slideshow
-            ? "提示:空格键 暂停 / 继续轮播;每 5 秒自动切换下一张,最后一张后按连播设置切下一个作品"
-            : "提示:空格键播放 / 暂停;视频源支持 HTTP Range,可任意拖动进度条"}
+            ? "提示:空格键 暂停 / 继续轮播;← / → 或 上一张 / 下一张手动切换;每 5 秒自动切换下一张,最后一张后按连播设置切下一个作品"
+            : "提示:空格键播放 / 暂停;← / → 切换上一个 / 下一个作品;视频源支持 HTTP Range,可任意拖动进度条"}
         </div>
       </DialogContent>
     </Dialog>
