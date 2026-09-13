@@ -1732,6 +1732,11 @@ export function mockRoute(req: MockRequest): MockResponse {
   return err(404, "not found");
 }
 
-// 启动:播种数据 + 下载调度器
+// 启动:播种数据 + 下载调度器。
+// 注意:setInterval 会让进程事件循环常驻——vite build 时 vite.config.ts 会 import 本模块,
+// 不 unref 会导致构建进程在产物写完后挂起不退出(服务器上表现为前端阶段永远不结束)。
 seed();
-setInterval(dispatcherTick, TICK_MS);
+const dispatcherTimer = setInterval(dispatcherTick, TICK_MS);
+if (typeof dispatcherTimer === "object" && typeof dispatcherTimer.unref === "function") {
+  dispatcherTimer.unref();
+}
