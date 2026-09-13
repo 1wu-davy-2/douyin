@@ -103,6 +103,14 @@ export function SettingsPage() {
     onError: (e) => toast.error("保存失败", { description: e.message }),
   });
 
+  // ---------- MinIO ----------
+  // hook 必须在任何 early return 之前调用(加载态切换后 hook 数量变化会触发 React #310)
+  const minioStatusQ = useQuery({
+    queryKey: ["minioStatus"],
+    queryFn: () => minioStatus(),
+    refetchInterval: 15000,
+  });
+
   const testMailMut = useMutation({
     mutationFn: testNotification,
     onSuccess: (res) => {
@@ -192,12 +200,6 @@ export function SettingsPage() {
     });
   };
 
-  // ---------- MinIO ----------
-  const minioStatusQ = useQuery({
-    queryKey: ["minioStatus"],
-    queryFn: () => minioStatus(),
-    refetchInterval: 15000,
-  });
   const saveMinioMut = useMutation({
     mutationFn: (patch: SettingsPatch) => patchSettings(patch),
     onSuccess: () => toast.success("MinIO 配置已保存"),
