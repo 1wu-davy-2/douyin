@@ -119,6 +119,17 @@ export function SettingsPage() {
     },
     onError: (e) => toast.error("测试邮件发送失败", { description: e.message }),
   });
+  const saveMinioMut = useMutation({
+    mutationFn: (patch: SettingsPatch) => patchSettings(patch),
+    onSuccess: () => toast.success("MinIO 配置已保存"),
+    onError: (e) => toast.error("MinIO 保存失败", { description: e.message }),
+  });
+  const testMinioMut = useMutation({
+    mutationFn: testMinio,
+    onSuccess: (r) =>
+      r.ok ? toast.success("MinIO 连接成功") : toast.error("MinIO 连接失败", { description: r.error }),
+    onError: (e) => toast.error("MinIO 连接失败", { description: e.message }),
+  });
 
   if (settings.isPending || !form) {
     return (
@@ -200,17 +211,6 @@ export function SettingsPage() {
     });
   };
 
-  const saveMinioMut = useMutation({
-    mutationFn: (patch: SettingsPatch) => patchSettings(patch),
-    onSuccess: () => toast.success("MinIO 配置已保存"),
-    onError: (e) => toast.error("MinIO 保存失败", { description: e.message }),
-  });
-  const testMinioMut = useMutation({
-    mutationFn: testMinio,
-    onSuccess: (r) =>
-      r.ok ? toast.success("MinIO 连接成功") : toast.error("MinIO 连接失败", { description: r.error }),
-    onError: (e) => toast.error("MinIO 连接失败", { description: e.message }),
-  });
   const saveMinio = () => {
     if (!form) return;
     const concurrency = toInt(form.minio.concurrency, 1, 8);
