@@ -9,7 +9,11 @@ WORKDIR /fe
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --registry=https://registry.npmmirror.com
 COPY frontend/ ./
-RUN node node_modules/vite/bin/vite.js build
+# 某些环境下 vite build 完成后进程因残留句柄不退出(产物已写完),
+# 用 timeout 兜底强杀;随后校验 dist 产物完整性,构建真失败时在此失败。
+RUN timeout 900 node node_modules/vite/bin/vite.js build || true; \
+    test -f dist/index.html && grep -q "assets/index-" dist/index.html \
+ && echo "[frontend] dist verified"
 
 # ---- 阶段 2:后端编译(CGON=0 纯静态;嵌入前端产物)----
 FROM golang:1.27-bookworm AS backend
