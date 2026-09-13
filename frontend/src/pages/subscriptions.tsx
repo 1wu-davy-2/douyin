@@ -210,7 +210,7 @@ export function SubscriptionsPage() {
                     {sub.new_works > 0 ? (
                       <button
                         type="button"
-                        className="text-sky-400 underline-offset-4 hover:underline"
+                        className="text-info underline-offset-4 hover:underline"
                         title="查看监控期间新增作品明细"
                         onClick={() => setStatsTarget(sub)}
                       >

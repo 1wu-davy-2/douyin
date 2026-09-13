@@ -46,7 +46,7 @@ export function LoginPage() {
           <span className="mx-auto mb-1 flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
             <Clapperboard className="size-5" />
           </span>
-          <CardTitle>抖音归档工具</CardTitle>
+          <CardTitle className="brand-serif tracking-wide">帧藏</CardTitle>
           <CardDescription>登录以管理本地作品归档</CardDescription>
         </CardHeader>
         <CardContent>

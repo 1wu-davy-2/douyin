@@ -17,6 +17,9 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-info: var(--info);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -27,41 +30,44 @@
 }
 
 /*
- * 深色为主的 zinc 主题色(参考 shadcn/ui zinc dark)。
+ * 「宣纸」浅色主题:米黄纸底 + 墨色文字 + 朱砂红强调 + 青绿语义色。
  * 所有组件统一通过 bg-background / bg-card / text-muted-foreground 等语义类取色。
  */
 :root {
   --radius: 0.625rem;
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.185 0.006 285.9);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0.006 285.885);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.92 0.004 286.32);
-  --primary-foreground: oklch(0.21 0.006 285.885);
-  --secondary: oklch(0.274 0.006 286.033);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.262 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.552 0.016 285.938);
+  --background: #f3efe3;
+  --foreground: #3f3a2e;
+  --card: #fbf8ee;
+  --card-foreground: #3f3a2e;
+  --popover: #fcfaf1;
+  --popover-foreground: #3f3a2e;
+  --primary: #bf4130;
+  --primary-foreground: #fdf6ec;
+  --secondary: #eae4d1;
+  --secondary-foreground: #4a4433;
+  --muted: #eae4d1;
+  --muted-foreground: #8d8570;
+  --accent: #ece5d2;
+  --accent-foreground: #38331f;
+  --destructive: #a2301f;
+  --destructive-foreground: #fdf6ec;
+  --info: #3e7d6f;
+  --success: #477d51;
+  --warning: #a0761f;
+  --border: rgb(96 82 56 / 15%);
+  --input: rgb(96 82 56 / 24%);
+  --ring: #b08d57;
 }
 
 @layer base {
   * {
     border-color: var(--color-border);
     scrollbar-width: thin;
-    scrollbar-color: oklch(0.42 0.006 286) transparent;
+    scrollbar-color: rgb(120 104 74 / 30%) transparent;
   }
 
   html {
-    color-scheme: dark;
+    color-scheme: light;
   }
 
   body {
@@ -79,8 +85,19 @@
     text-rendering: optimizeLegibility;
   }
 
+  /* 宣纸颗粒质感:极低透明度噪点罩层,不响应鼠标、不影响交互 */
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 2147483000;
+    pointer-events: none;
+    opacity: 0.18;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='260' height='260'><filter id='p'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%25' height='100%25' filter='url(%23p)'/></svg>");
+  }
+
   ::selection {
-    background-color: oklch(0.552 0.016 285.938 / 45%);
+    background-color: rgb(191 65 48 / 22%);
   }
 }
 
@@ -119,6 +136,10 @@
 }
 
 @layer components {
+  /* 品牌名衬线字(帧藏) */
+  .brand-serif {
+    font-family: "Noto Serif SC", "Source Han Serif SC", "SimSun", serif;
+  }
   .anim-overlay[data-state="open"] { animation: overlay-in 150ms ease-out; }
   .anim-overlay[data-state="closed"] { animation: overlay-out 150ms ease-in; }
   .anim-pop[data-state="open"] { animation: pop-in 150ms ease-out; }
@@ -128,4 +149,3 @@
   .anim-sheet[data-state="open"] { animation: sheet-in 180ms ease-out; }
   .anim-sheet[data-state="closed"] { animation: sheet-out 140ms ease-in; }
 }
-

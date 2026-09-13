@@ -479,7 +479,7 @@ function StatCard({
         <Icon
           className={cn(
             "size-4",
-            tone === "destructive" ? "text-destructive" : tone === "success" ? "text-emerald-400" : "text-muted-foreground",
+            tone === "destructive" ? "text-destructive" : tone === "success" ? "text-success" : "text-muted-foreground",
           )}
         />
       </div>

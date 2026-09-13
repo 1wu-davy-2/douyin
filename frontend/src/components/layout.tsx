@@ -39,8 +39,8 @@ export function Layout() {
             <Clapperboard className="size-4.5" />
           </span>
           <div className="leading-tight">
-            <p className="text-sm font-semibold">抖音归档工具</p>
-            <p className="text-[11px] text-muted-foreground">v2 · 本地归档</p>
+            <p className="brand-serif text-[15px] font-semibold tracking-wide">帧藏</p>
+            <p className="text-[11px] text-muted-foreground">创作者作品存档</p>
           </div>
         </div>
 

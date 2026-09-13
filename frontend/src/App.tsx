@@ -73,7 +73,7 @@ export default function App() {
   return (
     <>
       <AuthGate />
-      <Toaster theme="dark" position="top-center" richColors closeButton />
+      <Toaster theme="light" position="top-center" richColors closeButton />
     </>
   );
 }

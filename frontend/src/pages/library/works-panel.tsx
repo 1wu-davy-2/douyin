@@ -395,7 +395,7 @@ export function WorksPanel(props: WorksPanelProps) {
           <Download className="size-4" />
           {downloadPending ? "创建中…" : `下载已选 ${selected.size} 条`}
         </Button>
-        <Link to="/downloads" className="text-sm text-sky-400 underline-offset-4 hover:underline">
+        <Link to="/downloads" className="text-sm text-info underline-offset-4 hover:underline">
           查看队列
         </Link>
       </div>

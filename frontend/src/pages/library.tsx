@@ -816,7 +816,7 @@ function CreatorCard({
       {live?.running ? (
         <div className="mt-2.5 space-y-1">
           <Progress value={Math.min(92, live.page * 11)} className="h-1" />
-          <p className="text-[11px] text-sky-400">
+          <p className="text-[11px] text-info">
             扫描中 · 第 {live.page} 页 · 新增 {live.newCount}
           </p>
         </div>
