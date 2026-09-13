@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- 阶段 1:前端构建 ----
-FROM node:22-slim-bookworm AS frontend
+FROM node:22-bookworm-slim AS frontend
 WORKDIR /fe
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
