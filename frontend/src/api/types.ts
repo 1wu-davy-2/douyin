@@ -332,6 +332,15 @@ export interface SubscriptionPatch {
   enabled?: boolean;
 }
 
+/** GET /api/subscriptions/{id}/new-works 响应:监控期间(订阅创建后)新增作品明细。 */
+export interface SubscriptionNewWorks {
+  items: Work[];
+  /** 监控期间新增作品总数(与列表 new_works 同口径)。 */
+  total: number;
+  /** 其中已下载(succeeded)数(与列表 new_downloaded 同口径)。 */
+  downloaded: number;
+}
+
 // ---------- 设置 ----------
 export interface SmtpConfig {
   host: string;

@@ -170,9 +170,6 @@ interface MockSubscription {
   enabled: boolean;
   last_run_at: string | null;
   created_at: string;
-  /** 契约 v1.2:监控期间(订阅创建后)新收录的作品数,及其中已下载(succeeded)数。 */
-  new_works: number;
-  new_downloaded: number;
 }
 
 interface MockSettings {
@@ -352,7 +349,9 @@ function makeWorks(creator: MockCreator, count: number, baseTime: number, cols: 
       duration: rule.isImage ? 0 : Math.round(8 + rand() * rand() * 700),
       published_at: iso(t),
       collection_id: col ? col.id : null,
-      created_at: iso(baseTime),
+      // created_at 随发布时间递减铺开:订阅的监控窗口(.created_at >= 订阅创建点)
+      // 才能截出真实的"新增"数量,与后端口径一致
+      created_at: iso(t),
       type: rule.isDaily ? "daily" : rule.isImage ? "image" : "video",
       image_count: rule.imageCount,
       live_count: rule.liveCount,
@@ -494,7 +493,7 @@ function seed(): void {
     });
   });
 
-  // 初始订阅(监控期间统计给非零示例:自动下载的已下载数 > 0,未开自动下载的已下载为 0)
+  // 初始订阅(监控期间统计按真实口径从作品表推导,见 monitorStatsOf)
   state.subs.push({
     id: ++state.ids.sub,
     target_type: "creator",
@@ -506,8 +505,6 @@ function seed(): void {
     enabled: true,
     last_run_at: iso(now - 2 * 3600_000),
     created_at: iso(now - 6 * 86400_000),
-    new_works: 12,
-    new_downloaded: 9,
   });
   state.subs.push({
     id: ++state.ids.sub,
@@ -520,8 +517,6 @@ function seed(): void {
     enabled: true,
     last_run_at: iso(now - 5 * 3600_000),
     created_at: iso(now - 9 * 86400_000),
-    new_works: 4,
-    new_downloaded: 0,
   });
 
   // 初始扫描记录
@@ -945,10 +940,45 @@ function collectionJson(c: MockCollection): Collection {
   };
 }
 
+/**
+ * 监控期间统计(与后端 subscriptionListQuery 同口径):
+ * created_at >= 订阅创建点的作品,creator target 统计整主页、collection target 限定合集;
+ * 已下载 = 其中最新任务 succeeded(dl_status 推导一致)。
+ */
+function monitorStatsOf(s: MockSubscription): { newWorks: number; newDownloaded: number } {
+  const latest = latestJobByWork();
+  let newWorks = 0;
+  let newDownloaded = 0;
+  for (const w of state.works) {
+    if (w.creator_id !== s.creator_id) continue;
+    if (w.created_at < s.created_at) continue;
+    if (s.collection_id !== null && w.collection_id !== s.collection_id) continue;
+    newWorks += 1;
+    if (dlStatusOf(latest.get(w.id)) === "succeeded") newDownloaded += 1;
+  }
+  return { newWorks, newDownloaded };
+}
+
+/** 监控期间新增作品明细(订阅 new-works 端点):与 monitorStatsOf 同一窗口,按发布时间倒序。 */
+function monitorWorksOf(s: MockSubscription): Work[] {
+  const latest = latestJobByWork();
+  return state.works
+    .filter(
+      (w) =>
+        w.creator_id === s.creator_id &&
+        w.created_at >= s.created_at &&
+        (s.collection_id === null || w.collection_id === s.collection_id),
+    )
+    .slice()
+    .sort((a, b2) => b2.published_at.localeCompare(a.published_at))
+    .map((w) => workJson(w, latest));
+}
+
 function subscriptionJson(s: MockSubscription): Subscription {
   const creator = state.creators.find((c) => c.id === s.creator_id);
   const collection = s.collection_id ? state.collections.find((c) => c.id === s.collection_id) : undefined;
   const lastRun = s.last_run_at ? new Date(s.last_run_at).getTime() : null;
+  const stats = monitorStatsOf(s);
   return {
     id: s.id,
     target_type: s.target_type,
@@ -962,8 +992,8 @@ function subscriptionJson(s: MockSubscription): Subscription {
     last_run_at: s.last_run_at,
     next_run_at: s.enabled && lastRun ? iso(lastRun + s.interval_minutes * 60_000) : null,
     enabled: s.enabled,
-    new_works: s.new_works,
-    new_downloaded: s.new_downloaded,
+    new_works: stats.newWorks,
+    new_downloaded: stats.newDownloaded,
   };
 }
 
@@ -1128,8 +1158,6 @@ function upsertCreatorSubscription(creatorId: number, intervalMinutes: number, q
     enabled: true,
     last_run_at: null,
     created_at: iso(Date.now()),
-    new_works: 0,
-    new_downloaded: 0,
   });
 }
 
@@ -1617,8 +1645,6 @@ export function mockRoute(req: MockRequest): MockResponse {
           enabled: true,
           last_run_at: null,
           created_at: iso(now),
-          new_works: 0,
-          new_downloaded: 0,
         };
         state.subs.push(sub);
         return { status: 201, json: subscriptionJson(sub) };
@@ -1627,6 +1653,15 @@ export function mockRoute(req: MockRequest): MockResponse {
     }
     const sub = state.subs.find((s) => s.id === Number(seg[1]));
     if (!sub) return err(404, "订阅不存在");
+    if (seg[2] === "new-works" && method === "GET") {
+      // 监控期间新增作品明细(与列表统计同口径,含分页外全量)
+      const items = monitorWorksOf(sub);
+      return ok({
+        items,
+        total: items.length,
+        downloaded: items.filter((w) => w.dl_status === "succeeded").length,
+      });
+    }
     if (method === "PATCH") {
       if (b.interval_minutes !== undefined) sub.interval_minutes = Math.min(10080, Math.max(1, num(b.interval_minutes, sub.interval_minutes)));
       if (b.auto_download !== undefined) sub.auto_download = bool(b.auto_download, sub.auto_download);

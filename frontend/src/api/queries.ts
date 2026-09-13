@@ -21,6 +21,8 @@ export const qk = {
   downloadsAll: ["downloads"] as const,
   downloadsSummary: ["downloadsSummary"] as const,
   subscriptions: ["subscriptions"] as const,
+  /** 前缀含 ["subscriptions"],订阅列表 invalidate 时打开中的抽屉一并刷新。 */
+  subscriptionNewWorks: (id: number) => ["subscriptions", id, "new-works"] as const,
   settings: ["settings"] as const,
   assets: (workId: number) => ["assets", workId] as const,
 };
@@ -95,6 +97,15 @@ export function useSubscriptions() {
     queryFn: ep.listSubscriptions,
     // 监控统计(新收录/已下载)无 SSE 事件,30s 轮询兜底;页面不可见时 TanStack 自动暂停
     refetchInterval: 30_000,
+  });
+}
+
+/** 监控期间新增作品明细(抽屉);id=null 时禁用(抽屉未打开)。 */
+export function useSubscriptionNewWorks(id: number | null) {
+  return useQuery({
+    queryKey: qk.subscriptionNewWorks(id ?? 0),
+    queryFn: () => ep.getSubscriptionNewWorks(id as number),
+    enabled: id !== null,
   });
 }
 

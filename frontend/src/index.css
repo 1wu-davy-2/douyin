@@ -109,6 +109,14 @@
   from { opacity: 1; transform: scale(1); }
   to { opacity: 0; transform: scale(0.97); }
 }
+@keyframes sheet-in {
+  from { opacity: 0.6; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes sheet-out {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(24px); }
+}
 
 @layer components {
   .anim-overlay[data-state="open"] { animation: overlay-in 150ms ease-out; }
@@ -117,5 +125,7 @@
   .anim-pop[data-state="closed"] { animation: pop-out 150ms ease-in; }
   .anim-menu[data-state="open"] { animation: menu-in 120ms ease-out; }
   .anim-menu[data-state="closed"] { animation: menu-out 100ms ease-in; }
+  .anim-sheet[data-state="open"] { animation: sheet-in 180ms ease-out; }
+  .anim-sheet[data-state="closed"] { animation: sheet-out 140ms ease-in; }
 }
 

@@ -32,6 +32,7 @@ import type {
   SettingsPatch,
   Subscription,
   SubscriptionInput,
+  SubscriptionNewWorks,
   SubscriptionPatch,
   Work,
   WorkDetail,
@@ -210,6 +211,9 @@ export const createSubscription = (input: SubscriptionInput) =>
 export const updateSubscription = (id: number, patch: SubscriptionPatch) =>
   api<Subscription>(`/api/subscriptions/${id}`, { method: "PATCH", json: patch });
 export const deleteSubscription = (id: number) => api<{ ok: boolean }>(`/api/subscriptions/${id}`, { method: "DELETE" });
+/** 监控期间新增作品明细(表格"新增 X · 已下载 Y"链接背后的抽屉数据)。 */
+export const getSubscriptionNewWorks = (id: number) =>
+  api<SubscriptionNewWorks>(`/api/subscriptions/${id}/new-works`);
 
 // ---------- 设置 ----------
 export const getSettings = () => api<Settings>("/api/settings");
