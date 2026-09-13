@@ -354,3 +354,77 @@ func TestMockImagePostRules(t *testing.T) {
 		}
 	}
 }
+
+// TestMockAwemeTypeClassification locks in the sidecar's aweme_type handling
+// at the mock level (provider/mock.go must stay in lockstep with
+// sidecar/main.py):
+//   - aweme_type 150 (日常, mocked as idx%9==8) is a *label* on /posts only —
+//     the content form stays intact, so a video-form daily post still yields
+//     /work type="video" with a full variant ladder;
+//   - aweme_type 55 (直播回放, images empty) falls through the same fallback
+//     the mock uses for every non-150 video post: type="video";
+//   - /work never returns "daily" — it only speaks content forms
+//     (video | image), which is what the downloader keys on.
+func TestMockAwemeTypeClassification(t *testing.T) {
+	mock := NewMockProvider()
+	ctx := context.Background()
+
+	// pos 9 (idx 8): aweme_type 150, video-form daily post.
+	page, err := mock.PostsPage(ctx, "sec_demo", "8", 1)
+	if err != nil {
+		t.Fatalf("posts page: %v", err)
+	}
+	item := page.Items[0]
+	if item.ItemID != "mock_0009" {
+		t.Fatalf("item_id = %q, want mock_0009", item.ItemID)
+	}
+	if item.Type != TypeDaily || item.ImageCount != 0 || item.Duration <= 0 {
+		t.Fatalf("posts: type=%q image_count=%d duration=%d, want daily/0/>0 (150 keeps video form)",
+			item.Type, item.ImageCount, item.Duration)
+	}
+	d, err := mock.WorkDetail(ctx, "mock_0009")
+	if err != nil {
+		t.Fatalf("work detail 9: %v", err)
+	}
+	if d.Type != TypeVideo || len(d.Images) != 0 || len(d.Variants) == 0 {
+		t.Fatalf("work: type=%q images=%d variants=%d, want video/0/>0 (video-form daily downloads as video)",
+			d.Type, len(d.Images), len(d.Variants))
+	}
+
+	// pos 63 (idx 62): aweme_type 150 on a gallery post (62%9==8, 62%7==6).
+	page, err = mock.PostsPage(ctx, "sec_demo", "62", 1)
+	if err != nil {
+		t.Fatalf("posts page 63: %v", err)
+	}
+	if got := page.Items[0].Type; got != TypeDaily {
+		t.Fatalf("daily label missing on gallery form: pos 63 type = %q, want daily", got)
+	}
+	if want := 3 + 62%4; page.Items[0].ImageCount != want {
+		t.Fatalf("pos 63 image_count = %d, want %d", page.Items[0].ImageCount, want)
+	}
+	d, err = mock.WorkDetail(ctx, "mock_0063")
+	if err != nil {
+		t.Fatalf("work detail 63: %v", err)
+	}
+	if d.Type != TypeImage || len(d.Images) != 3+62%4 || len(d.Variants) != 0 {
+		t.Fatalf("work 63: type=%q images=%d variants=%d, want image-form daily (images kept, no variants)",
+			d.Type, len(d.Images), len(d.Variants))
+	}
+
+	// pos 1 (idx 0): plain video post — the fallback every non-150,
+	// images-empty aweme takes, including aweme_type 55 live replays.
+	page, err = mock.PostsPage(ctx, "sec_demo", "0", 1)
+	if err != nil {
+		t.Fatalf("posts page 1: %v", err)
+	}
+	if got := page.Items[0].Type; got != TypeVideo {
+		t.Fatalf("pos 1 type = %q, want video (55 live replay fallback)", got)
+	}
+	d, err = mock.WorkDetail(ctx, "mock_0001")
+	if err != nil {
+		t.Fatalf("work detail 1: %v", err)
+	}
+	if d.Type != TypeVideo || len(d.Variants) == 0 {
+		t.Fatalf("work 1: type=%q variants=%d, want video with variants", d.Type, len(d.Variants))
+	}
+}

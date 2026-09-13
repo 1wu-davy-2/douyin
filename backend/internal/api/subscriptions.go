@@ -3,10 +3,11 @@ package api
 // Subscription monitor endpoints (docs/api.md "订阅监控 Subscriptions").
 // Replaces the stage-1 placeholder.
 //
-//	GET    /api/subscriptions      -> [subscription]
-//	POST   /api/subscriptions      -> create (creator | collection)
-//	PATCH  /api/subscriptions/{id} -> partial update
+//	GET    /api/subscriptions                  -> [subscription]
+//	POST   /api/subscriptions                  -> create (creator | collection)
+//	PATCH  /api/subscriptions/{id}             -> partial update
 //	DELETE /api/subscriptions/{id}
+//	GET    /api/subscriptions/{id}/new-works   -> monitor-period works detail
 //
 // next_run_at is projected with the same deterministic +-20% interval jitter
 // the scheduler applies (scheduler.NextRunAt), so the UI and the tick loop
@@ -27,6 +28,7 @@ func (s *Server) registerSubscriptionRoutes(mux *http.ServeMux) {
 	register(mux, []endpoint{
 		{http.MethodGet, "/api/subscriptions", s.handleListSubscriptions},
 		{http.MethodPost, "/api/subscriptions", s.handleCreateSubscription},
+		{http.MethodGet, "/api/subscriptions/{id}/new-works", s.handleSubscriptionNewWorks},
 		{http.MethodPatch, "/api/subscriptions/{id}", s.handlePatchSubscription},
 		{http.MethodDelete, "/api/subscriptions/{id}", s.handleDeleteSubscription},
 	})
@@ -318,6 +320,75 @@ func (s *Server) handlePatchSubscription(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// subscriptionNewWorks is the GET /api/subscriptions/{id}/new-works response:
+// the works recorded during the monitor period (created after the
+// subscription), with the same item shape as the works lists.
+type subscriptionNewWorks struct {
+	Items      []workItem `json:"items"`
+	Total      int64      `json:"total"`
+	Downloaded int64      `json:"downloaded"`
+}
+
+// handleSubscriptionNewWorks GET /api/subscriptions/{id}/new-works — detail
+// behind the list's new_works / new_downloaded monitor stats. Scope mirrors
+// subscriptionListQuery exactly: works with created_at >= subscription
+// created_at, within the target scope (whole creator for creator targets,
+// the single collection otherwise), newest published first.
+func (s *Server) handleSubscriptionNewWorks(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	sub, ok := s.loadSubscription(w, r, id)
+	if !ok {
+		return // loadSubscription wrote 404/500 itself
+	}
+
+	where := ` WHERE w.deleted_at IS NULL AND w.created_at >= ? AND w.creator_id = ?`
+	args := []any{sub.CreatedAt, sub.CreatorID}
+	if sub.CollectionID != nil {
+		where += ` AND w.collection_id = ?`
+		args = append(args, *sub.CollectionID)
+	}
+
+	// new_downloaded: the same dlStatusExpr-over-latest-job derivation the
+	// list stats use, so the drawer always agrees with the table numbers.
+	downloadedWhere := where + ` AND ` + dlStatusExpr + ` = 'succeeded'`
+	var total, downloaded int64
+	if err := s.deps.DB.QueryRowContext(r.Context(),
+		`SELECT COUNT(*) FROM works w`+where, args...).Scan(&total); err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	if err := s.deps.DB.QueryRowContext(r.Context(),
+		`SELECT COUNT(*) FROM works w`+latestJobJoin+downloadedWhere, args...).Scan(&downloaded); err != nil {
+		writeInternalError(w, err)
+		return
+	}
+
+	rows, err := s.deps.DB.QueryContext(r.Context(),
+		worksListQuery+latestJobJoin+where+` ORDER BY w.published_at DESC, w.id DESC`, args...)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	defer rows.Close()
+	items := make([]workItem, 0, total)
+	for rows.Next() {
+		it, err := scanWorkItem(rows)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		items = append(items, it)
+	}
+	if err := rows.Err(); err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, subscriptionNewWorks{Items: items, Total: total, Downloaded: downloaded})
 }
 
 // handleDeleteSubscription DELETE /api/subscriptions/{id}.

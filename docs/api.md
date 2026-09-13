@@ -111,6 +111,7 @@ job 字段:
 | GET | `/api/subscriptions` | → `[{id, target_type, creator_id, collection_id?, creator_nickname, target_name, interval_minutes, auto_download, quality, last_run_at, next_run_at, enabled, new_works, new_downloaded}]`;`new_works` = 监控期间(该订阅创建后)新收录的作品数,`new_downloaded` = 其中已下载(succeeded)数 |
 | POST | `/api/subscriptions` | `{target_type:"creator"\|"collection", creator_id, collection_id?, interval_minutes, auto_download:bool, quality?}` |
 | PATCH | `/api/subscriptions/{id}` | 部分更新(同上字段均可选) |
+| GET | `/api/subscriptions/{id}/new-works` | 监控期间新增作品明细 → `{items:[workItem], total, downloaded}`(workItem 结构同 works 列表;范围 = 该订阅创建后新收录,creator target 全部作品 / collection target 限定合集;按 published_at desc;`total`/`downloaded` 与列表的 `new_works`/`new_downloaded` 同口径) |
 | DELETE | `/api/subscriptions/{id}` | |
 
 新作品在 `auto_download=true` 时自动按 `quality` 入队(默认 `1080p`,没有则最高档)。

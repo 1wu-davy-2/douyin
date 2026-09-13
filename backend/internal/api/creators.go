@@ -797,6 +797,35 @@ const latestJobJoin = `
 	LEFT JOIN download_jobs lj ON lj.id = (
 		SELECT j.id FROM download_jobs j WHERE j.work_id = w.id ORDER BY j.id DESC LIMIT 1)`
 
+// scanWorkItem scans one row of worksListQuery (+ latestJobJoin) into a
+// workItem, normalizing the nullable columns. Shared by the works list and
+// the subscription new-works endpoint so both emit identical item shapes.
+func scanWorkItem(rows *sql.Rows) (workItem, error) {
+	var it workItem
+	var collectionID, collectionName, downloadedQuality sql.NullString
+	var published sql.NullString
+	if err := rows.Scan(&it.ID, &it.ItemID, &it.Title, &it.CoverURL, &it.Duration, &published,
+		&collectionID, &collectionName, &it.CreatedAt, &it.Type, &it.ImageCount,
+		&it.DlStatus, &downloadedQuality); err != nil {
+		return it, err
+	}
+	if published.Valid {
+		it.PublishedAt = &published.String
+	}
+	if collectionID.Valid {
+		if cid, err := strconv.ParseInt(collectionID.String, 10, 64); err == nil {
+			it.CollectionID = &cid
+		}
+	}
+	if collectionName.Valid {
+		it.CollectionName = &collectionName.String
+	}
+	if downloadedQuality.Valid {
+		it.DownloadedQuality = &downloadedQuality.String
+	}
+	return it, nil
+}
+
 // sortClause validates the sort parameter and returns its ORDER BY SQL.
 func sortClause(sort string) (string, bool) {
 	switch sort {
@@ -874,28 +903,10 @@ func (s *Server) serveWorkList(w http.ResponseWriter, r *http.Request, f workFil
 
 	items := make([]workItem, 0)
 	for rows.Next() {
-		var it workItem
-		var collectionID, collectionName, downloadedQuality sql.NullString
-		var published sql.NullString
-		if err := rows.Scan(&it.ID, &it.ItemID, &it.Title, &it.CoverURL, &it.Duration, &published,
-			&collectionID, &collectionName, &it.CreatedAt, &it.Type, &it.ImageCount,
-			&it.DlStatus, &downloadedQuality); err != nil {
+		it, err := scanWorkItem(rows)
+		if err != nil {
 			writeInternalError(w, err)
 			return
-		}
-		if published.Valid {
-			it.PublishedAt = &published.String
-		}
-		if collectionID.Valid {
-			if cid, err := strconv.ParseInt(collectionID.String, 10, 64); err == nil {
-				it.CollectionID = &cid
-			}
-		}
-		if collectionName.Valid {
-			it.CollectionName = &collectionName.String
-		}
-		if downloadedQuality.Valid {
-			it.DownloadedQuality = &downloadedQuality.String
 		}
 		items = append(items, it)
 	}
