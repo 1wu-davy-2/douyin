@@ -32,8 +32,42 @@ func TestMigrateIdempotent(t *testing.T) {
 	if err := handle.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != 4 {
-		t.Fatalf("user_version = %d, want 4", version)
+	if version != 5 {
+		t.Fatalf("user_version = %d, want 5", version)
+	}
+}
+
+// Migration 0005 (contract v1.4): creators.alias and creators.group_name
+// exist, are NULL for pre-existing rows and round-trip arbitrary text.
+func TestMigrateCreatorAliasGroup(t *testing.T) {
+	handle := openTestDB(t)
+	if err := Migrate(handle, t.TempDir()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	ctx := context.Background()
+	if _, err := handle.ExecContext(ctx,
+		`INSERT INTO creators(id, sec_uid, created_at) VALUES (1, 'secA', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	var alias, groupName sql.NullString
+	if err := handle.QueryRowContext(ctx,
+		`SELECT alias, group_name FROM creators WHERE id = 1`).Scan(&alias, &groupName); err != nil {
+		t.Fatalf("select alias/group_name: %v", err)
+	}
+	if alias.Valid || groupName.Valid {
+		t.Fatalf("alias/group_name = %v/%v, want NULL/NULL", alias, groupName)
+	}
+	if _, err := handle.ExecContext(ctx,
+		`UPDATE creators SET alias = '别名', group_name = '默认分组' WHERE id = 1`); err != nil {
+		t.Fatalf("update alias/group_name: %v", err)
+	}
+	if err := handle.QueryRowContext(ctx,
+		`SELECT alias, group_name FROM creators WHERE id = 1`).Scan(&alias, &groupName); err != nil {
+		t.Fatal(err)
+	}
+	if !alias.Valid || alias.String != "别名" || !groupName.Valid || groupName.String != "默认分组" {
+		t.Fatalf("alias/group_name roundtrip = %v/%v", alias, groupName)
 	}
 }
 

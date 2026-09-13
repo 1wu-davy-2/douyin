@@ -3,9 +3,10 @@ package api
 // Creators/works/collections endpoints (docs/api.md "博主与作品 Creators /
 // Works" + "合集 Collections"). Replaces the stage-1 placeholder.
 //
-//	POST   /api/creators              -> 202 {creator_id, scan_id}
+//	POST   /api/creators              -> 202 {creator_id, scan_id, creator}
 //	GET    /api/creators              -> [creator]
 //	GET    /api/creators/{id}         -> creator + last_scan
+//	PATCH  /api/creators/{id}         -> {ok, alias, group}
 //	DELETE /api/creators/{id}
 //	POST   /api/creators/{id}/rescan  -> 202 {scan_id}
 //	GET    /api/creators/{id}/collections
@@ -19,8 +20,10 @@ package api
 // download_jobs row (id DESC LIMIT 1) in the works listing SQL.
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -30,6 +33,7 @@ import (
 
 	"douyin/backend/internal/db"
 	"douyin/backend/internal/scanner"
+	"douyin/backend/internal/settings"
 )
 
 func (s *Server) registerCreatorRoutes(mux *http.ServeMux) {
@@ -37,6 +41,7 @@ func (s *Server) registerCreatorRoutes(mux *http.ServeMux) {
 		{http.MethodPost, "/api/creators", s.handleCreateCreator},
 		{http.MethodGet, "/api/creators", s.handleListCreators},
 		{http.MethodGet, "/api/creators/{id}", s.handleGetCreator},
+		{http.MethodPatch, "/api/creators/{id}", s.handlePatchCreator},
 		{http.MethodDelete, "/api/creators/{id}", s.handleDeleteCreator},
 		{http.MethodPost, "/api/creators/{id}/rescan", s.handleRescanCreator},
 		{http.MethodGet, "/api/creators/{id}/collections", s.handleCreatorCollections},
@@ -66,6 +71,8 @@ type creatorView struct {
 	ID                int64         `json:"id"`
 	SecUID            string        `json:"sec_uid"`
 	Nickname          string        `json:"nickname"`
+	Alias             *string       `json:"alias"`
+	Group             *string       `json:"group"`
 	AvatarURL         string        `json:"avatar_url"`
 	ProfileURL        string        `json:"profile_url"`
 	ReportedWorkCount int64         `json:"reported_work_count"`
@@ -90,7 +97,7 @@ type lastScanView struct {
 }
 
 const creatorListQuery = `
-	SELECT c.id, c.sec_uid, c.nickname, c.avatar_url, c.profile_url, c.reported_work_count, c.created_at,
+	SELECT c.id, c.sec_uid, c.nickname, c.alias, c.group_name, c.avatar_url, c.profile_url, c.reported_work_count, c.created_at,
 	       (SELECT COUNT(*) FROM works w WHERE w.creator_id = c.id AND w.deleted_at IS NULL) AS works_count,
 	       (SELECT COUNT(DISTINCT dj.work_id) FROM download_jobs dj
 	        JOIN works w2 ON w2.id = dj.work_id
@@ -100,23 +107,44 @@ const creatorListQuery = `
 	        WHERE w3.creator_id = c.id AND a.kind IN ('video', 'image')), 0) AS download_bytes
 	FROM creators c`
 
-func scanCreatorView(rows *sql.Rows) (creatorView, error) {
+// scanCreatorView scans one creator row (alias/group come back as SQL NULL
+// for "unset" and are projected as JSON null).
+func scanCreatorView(scan func(...any) error) (creatorView, error) {
 	var v creatorView
-	err := rows.Scan(&v.ID, &v.SecUID, &v.Nickname, &v.AvatarURL, &v.ProfileURL,
+	var alias, groupName sql.NullString
+	err := scan(&v.ID, &v.SecUID, &v.Nickname, &alias, &groupName, &v.AvatarURL, &v.ProfileURL,
 		&v.ReportedWorkCount, &v.CreatedAt, &v.WorksCount, &v.DownloadedCount, &v.DownloadBytes)
+	if alias.Valid {
+		v.Alias = &alias.String
+	}
+	if groupName.Valid {
+		v.Group = &groupName.String
+	}
 	return v, err
 }
 
-// handleCreateCreator POST /api/creators {profile_url} -> 202 {creator_id,
-// scan_id}. The scan runs asynchronously; adding an existing creator returns
-// the known row and triggers a new (incremental) scan.
+// handleCreateCreator POST /api/creators {profile_url, download_root?,
+// subscribe?, group?, alias?} (contract v1.4b) -> 202 {creator_id, scan_id,
+// creator}. The scan runs asynchronously; adding an existing creator returns
+// the known row and triggers a new (incremental) scan. Optional parameters
+// also apply on re-add. subscribe (non-null) additionally creates — or on
+// re-add refreshes — the creator-level subscription (interval required,
+// quality = given or the global default, auto_download defaults true).
 func (s *Server) handleCreateCreator(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Scanner == nil {
 		writeInternalError(w, errors.New("scanner not wired"))
 		return
 	}
 	var body struct {
-		ProfileURL string `json:"profile_url"`
+		ProfileURL   string          `json:"profile_url"`
+		DownloadRoot json.RawMessage `json:"download_root"`
+		Subscribe    *struct {
+			IntervalMinutes int    `json:"interval_minutes"`
+			Quality         string `json:"quality"`
+			AutoDownload    *bool  `json:"auto_download"`
+		} `json:"subscribe"`
+		Group json.RawMessage `json:"group"`
+		Alias json.RawMessage `json:"alias"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -127,19 +155,65 @@ func (s *Server) handleCreateCreator(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Optional params: decode/validate up front so a bad request never
+	// half-creates. null and "" mean "clear" (contract v1.4); an absent field
+	// keeps the stored value on re-add.
+	alias, err := decodeOptionalText(body.Alias)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "alias must be a string or null")
+		return
+	}
+	group, err := decodeOptionalText(body.Group)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "group must be a string or null")
+		return
+	}
+	downloadRoot, err := decodeOptionalText(body.DownloadRoot)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "download_root must be a string or null")
+		return
+	}
+	if downloadRoot.provided && !downloadRoot.clear {
+		root, verr := settings.ValidateDownloadRoot(downloadRoot.value)
+		if verr != nil {
+			writeError(w, http.StatusBadRequest, verr.Error())
+			return
+		}
+		downloadRoot.value = root
+	}
+	// subscribe (contract v1.4b): present -> create/refresh the creator-level
+	// subscription. interval_minutes is required (>= 1); quality falls back to
+	// the global default; auto_download defaults to true.
+	subscribeInterval := 0
+	subscribeQuality := ""
+	subscribeAutoDownload := false
+	if body.Subscribe != nil {
+		subscribeInterval = body.Subscribe.IntervalMinutes
+		if subscribeInterval < 1 {
+			writeError(w, http.StatusBadRequest, "subscribe.interval_minutes must be >= 1")
+			return
+		}
+		subscribeQuality = strings.TrimSpace(body.Subscribe.Quality)
+		if subscribeQuality != "" && !validQualities[subscribeQuality] {
+			writeError(w, http.StatusBadRequest, "subscribe.quality must be 540p, 720p or 1080p")
+			return
+		}
+		subscribeAutoDownload = body.Subscribe.AutoDownload == nil || *body.Subscribe.AutoDownload
+	}
+
 	ctx := r.Context()
 	var creatorID int64
 	var isNew bool
-	err := s.deps.DB.QueryRowContext(ctx,
+	err = s.deps.DB.QueryRowContext(ctx,
 		`SELECT id FROM creators WHERE sec_uid = ?`, secUID).Scan(&creatorID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		isNew = true
 		profileURL := "https://www.douyin.com/user/" + secUID
 		res, ierr := s.deps.DB.ExecContext(ctx,
-			`INSERT INTO creators (sec_uid, nickname, avatar_url, profile_url, created_at)
-			 VALUES (?, '', '', ?, ?)`,
-			secUID, profileURL, nowRFC3339())
+			`INSERT INTO creators (sec_uid, nickname, avatar_url, profile_url, alias, group_name, download_root, created_at)
+			 VALUES (?, '', '', ?, ?, ?, ?, ?)`,
+			secUID, profileURL, alias.sqlValue(), group.sqlValue(), downloadRoot.sqlValue(), nowRFC3339())
 		if ierr != nil {
 			writeInternalError(w, ierr)
 			return
@@ -151,6 +225,35 @@ func (s *Server) handleCreateCreator(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeInternalError(w, err)
 		return
+	default:
+		// Re-add: the optional parameters take effect again (contract v1.4).
+		// Only provided fields are applied; omitted ones keep their value.
+		sets, args := []string{}, []any{}
+		if alias.provided {
+			sets, args = append(sets, "alias = ?"), append(args, alias.sqlValue())
+		}
+		if group.provided {
+			sets, args = append(sets, "group_name = ?"), append(args, group.sqlValue())
+		}
+		if downloadRoot.provided {
+			sets, args = append(sets, "download_root = ?"), append(args, downloadRoot.sqlValue())
+		}
+		if len(sets) > 0 {
+			args = append(args, creatorID)
+			if _, ierr := s.deps.DB.ExecContext(ctx,
+				`UPDATE creators SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...); ierr != nil {
+				writeInternalError(w, ierr)
+				return
+			}
+		}
+	}
+
+	if body.Subscribe != nil {
+		if err := s.ensureCreatorSubscription(ctx, creatorID,
+			subscribeInterval, subscribeQuality, subscribeAutoDownload); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	// New creators get a full first import; re-adds are incremental.
@@ -163,7 +266,98 @@ func (s *Server) handleCreateCreator(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"creator_id": creatorID, "scan_id": scanID})
+	creator, err := s.loadCreatorView(ctx, creatorID)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"creator_id": creatorID,
+		"scan_id":    scanID,
+		"creator":    creator,
+	})
+}
+
+// optionalText is a decoded optional JSON text field that distinguishes
+// "absent" (keep the stored value) from "explicitly null or empty" (clear it).
+type optionalText struct {
+	provided bool
+	clear    bool
+	value    string
+}
+
+// decodeOptionalText interprets a raw JSON field: absent -> provided=false;
+// null or a whitespace-only string -> clear; any other string -> value.
+func decodeOptionalText(raw json.RawMessage) (optionalText, error) {
+	var o optionalText
+	if len(raw) == 0 {
+		return o, nil // field absent from the body
+	}
+	o.provided = true
+	if string(bytes.TrimSpace(raw)) == "null" {
+		o.clear = true
+		return o, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return o, err
+	}
+	o.value = strings.TrimSpace(s)
+	if o.value == "" {
+		o.clear = true
+	}
+	return o, nil
+}
+
+// sqlValue renders the field for a SQL assignment: absent (keep semantics on
+// COALESCE) and clear both map to NULL; a new creator row stores NULL too.
+func (o optionalText) sqlValue() any {
+	if o.clear || !o.provided {
+		return nil
+	}
+	return o.value
+}
+
+// ensureCreatorSubscription creates (or, when one already exists, refreshes)
+// the creator-level subscription implied by POST /api/creators subscribe.
+// The quality falls back to the global download_quality setting when empty.
+func (s *Server) ensureCreatorSubscription(ctx context.Context, creatorID int64,
+	intervalMinutes int, quality string, autoDownload bool) error {
+	if quality == "" {
+		if view, err := s.deps.Store.View(ctx); err == nil && view.DownloadQuality != "" {
+			quality = view.DownloadQuality
+		} else {
+			quality = "1080p"
+		}
+	}
+	var existing int64
+	err := s.deps.DB.QueryRowContext(ctx,
+		`SELECT id FROM subscriptions
+		 WHERE target_type = 'creator' AND creator_id = ? AND collection_id IS NULL
+		 ORDER BY id LIMIT 1`, creatorID).Scan(&existing)
+	switch {
+	case err == nil:
+		// Re-add with subscribe: the given parameters take effect again.
+		_, err = s.deps.DB.ExecContext(ctx, `
+			UPDATE subscriptions SET interval_minutes = ?, quality = ?, auto_download = ?, enabled = 1
+			WHERE id = ?`, intervalMinutes, quality, boolInt(autoDownload), existing)
+		return err
+	case errors.Is(err, sql.ErrNoRows):
+		_, err = s.deps.DB.ExecContext(ctx, `
+			INSERT INTO subscriptions (target_type, creator_id, collection_id, interval_minutes,
+			                           auto_download, quality, enabled, created_at)
+			VALUES ('creator', ?, NULL, ?, ?, ?, 1, ?)`,
+			creatorID, intervalMinutes, boolInt(autoDownload), quality, nowRFC3339())
+		return err
+	default:
+		return err
+	}
+}
+
+// loadCreatorView fetches one creator through the shared list query.
+func (s *Server) loadCreatorView(ctx context.Context, id int64) (creatorView, error) {
+	row := s.deps.DB.QueryRowContext(ctx, creatorListQuery+` WHERE c.id = ?`, id)
+	return scanCreatorView(row.Scan)
 }
 
 // handleListCreators GET /api/creators -> [creator] by created_at desc.
@@ -177,7 +371,7 @@ func (s *Server) handleListCreators(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	out := make([]creatorView, 0)
 	for rows.Next() {
-		v, err := scanCreatorView(rows)
+		v, err := scanCreatorView(rows.Scan)
 		if err != nil {
 			writeInternalError(w, err)
 			return
@@ -197,9 +391,8 @@ func (s *Server) handleGetCreator(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var v creatorView
-	row := s.deps.DB.QueryRowContext(r.Context(), creatorListQuery+` WHERE c.id = ?`, id)
-	if err := scanCreatorView2(row, &v); err != nil {
+	v, err := s.loadCreatorView(r.Context(), id)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "creator not found")
 			return
@@ -210,7 +403,7 @@ func (s *Server) handleGetCreator(w http.ResponseWriter, r *http.Request) {
 
 	var ls lastScanView
 	var finished, lastErr sql.NullString
-	err := s.deps.DB.QueryRowContext(r.Context(), `
+	err = s.deps.DB.QueryRowContext(r.Context(), `
 		SELECT id, status, pages, new_count, updated_count, empty_pages, completeness,
 		       started_at, finished_at, last_error
 		FROM scan_runs WHERE creator_id = ? ORDER BY id DESC LIMIT 1`, id).
@@ -234,9 +427,83 @@ func (s *Server) handleGetCreator(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, v)
 }
 
-func scanCreatorView2(row *sql.Row, v *creatorView) error {
-	return row.Scan(&v.ID, &v.SecUID, &v.Nickname, &v.AvatarURL, &v.ProfileURL,
-		&v.ReportedWorkCount, &v.CreatedAt, &v.WorksCount, &v.DownloadedCount, &v.DownloadBytes)
+// handlePatchCreator PATCH /api/creators/{id} {alias?, group?} (contract
+// v1.4) -> {ok, alias, group}. null/empty clears a field: alias null shows
+// the default nickname, group null moves the creator out of its group.
+func (s *Server) handlePatchCreator(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Alias json.RawMessage `json:"alias"`
+		Group json.RawMessage `json:"group"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	alias, err := decodeOptionalText(body.Alias)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "alias must be a string or null")
+		return
+	}
+	group, err := decodeOptionalText(body.Group)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "group must be a string or null")
+		return
+	}
+	if !alias.provided && !group.provided {
+		writeError(w, http.StatusBadRequest, "nothing to update: provide alias and/or group")
+		return
+	}
+
+	// Dynamic SET: an absent field keeps its value; a provided null/empty
+	// field is explicitly set to NULL (clear).
+	sets, args := []string{}, []any{}
+	for field, o := range map[string]optionalText{"alias": alias, "group_name": group} {
+		if !o.provided {
+			continue
+		}
+		if o.clear {
+			sets = append(sets, field+" = NULL")
+		} else {
+			sets = append(sets, field+" = ?")
+			args = append(args, o.value)
+		}
+	}
+	args = append(args, id)
+
+	ctx := r.Context()
+	res, err := s.deps.DB.ExecContext(ctx,
+		`UPDATE creators SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeError(w, http.StatusNotFound, "creator not found")
+		return
+	}
+	// Read back the full resulting values (a PATCH may only touch one field).
+	var outAlias, outGroup sql.NullString
+	if err := s.deps.DB.QueryRowContext(ctx,
+		`SELECT alias, group_name FROM creators WHERE id = ?`, id).
+		Scan(&outAlias, &outGroup); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "creator not found")
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	resp := map[string]any{"ok": true, "alias": nil, "group": nil}
+	if outAlias.Valid {
+		resp["alias"] = outAlias.String
+	}
+	if outGroup.Valid {
+		resp["group"] = outGroup.String
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleDeleteCreator DELETE /api/creators/{id} — removes the creator and its
@@ -418,9 +685,12 @@ type workFilter struct {
 	// collectionNone: 只看单发作品(collection_id IS NULL,即排除合集)。
 	// 与 collectionID 互斥;由 collection_id=none 参数设置。
 	collectionNone bool
-	q            string
-	workType     string // video | image | live; any other value is ignored
-	dl           string // none | queued | downloading | succeeded | failed; ignored otherwise
+	// excludeCollectionIDs (契约 v1.4b): 多选排除合集 — 隐藏这些合集的作品
+	// (collection_id IS NULL 或 NOT IN)。非空时优先于 collectionID/collectionNone。
+	excludeCollectionIDs []int64
+	q                    string
+	workType             string // video | image | live; any other value is ignored
+	dl                   string // none | queued | downloading | succeeded | failed; ignored otherwise
 }
 
 // validDlFilters are the contract-accepted dl= values (canceled is not
@@ -436,7 +706,14 @@ func (f workFilter) where() (string, []any) {
 		where += ` AND w.creator_id = ?`
 		args = append(args, f.creatorID)
 	}
-	if f.collectionNone {
+	if len(f.excludeCollectionIDs) > 0 {
+		// 契约 v1.4b:多选排除合集,未分组(单发)作品始终保留。
+		ph := placeholdersOf(len(f.excludeCollectionIDs))
+		where += ` AND (w.collection_id IS NULL OR w.collection_id NOT IN (` + ph + `))`
+		for _, id := range f.excludeCollectionIDs {
+			args = append(args, id)
+		}
+	} else if f.collectionNone {
 		where += ` AND w.collection_id IS NULL`
 	} else if f.collectionID != nil {
 		where += ` AND w.collection_id = ?`
@@ -484,6 +761,11 @@ func escapeLike(s string) string {
 	s = strings.ReplaceAll(s, `%`, `\%`)
 	s = strings.ReplaceAll(s, `_`, `\_`)
 	return s
+}
+
+// placeholdersOf renders "?,?,?" for an n-element IN/NOT IN list.
+func placeholdersOf(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
 
 // dlStatusExpr maps the latest job per work to the contract's dl_status
@@ -635,7 +917,15 @@ func (s *Server) handleCreatorWorks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f := workFilter{creatorID: id}
-	if raw := strings.TrimSpace(r.URL.Query().Get("collection_id")); raw != "" {
+	if raw := strings.TrimSpace(r.URL.Query().Get("exclude_collection_ids")); raw != "" {
+		// 契约 v1.4b:exclude 优先 — 与 collection_id 同时给出时以 exclude 为准。
+		ids, perr := parseInt64List(raw)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, "invalid exclude_collection_ids (comma separated ids)")
+			return
+		}
+		f.excludeCollectionIDs = ids
+	} else if raw := strings.TrimSpace(r.URL.Query().Get("collection_id")); raw != "" {
 		if raw == "none" {
 			f.collectionNone = true // 单发作品:排除合集
 		} else {
@@ -649,6 +939,24 @@ func (s *Server) handleCreatorWorks(w http.ResponseWriter, r *http.Request) {
 	}
 	f.q = strings.TrimSpace(r.URL.Query().Get("q"))
 	s.serveWorkList(w, r, f)
+}
+
+// parseInt64List parses a comma separated id list ("1,2,3"); every element
+// must be a positive integer.
+func parseInt64List(raw string) ([]int64, error) {
+	ids := make([]int64, 0, 4)
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		id, err := strconv.ParseInt(part, 10, 64)
+		if err != nil || id <= 0 {
+			return nil, fmt.Errorf("invalid id %q", part)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 // handleCollectionWorks GET /api/collections/{id}/works (same parameters as
@@ -805,16 +1113,18 @@ type jobSummary struct {
 }
 
 // handleBatchWorkIDs POST /api/works/batch-ids {creator_id, q?, collection_id?,
-// type?, dl?} -> {ids:[...]} for "select all matching". The filters are the
-// exact same construction as the works lists (workFilter).
+// exclude_collection_ids?, type?, dl?} -> {ids:[...]} for "select all
+// matching". The filters are the exact same construction as the works lists
+// (workFilter); exclude_collection_ids is an array here (contract v1.4b).
 func (s *Server) handleBatchWorkIDs(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		CreatorID      int64   `json:"creator_id"`
-		Q              *string `json:"q"`
-		CollectionID   *int64  `json:"collection_id"`
-		CollectionNone bool    `json:"collection_none"`
-		Type           *string `json:"type"`
-		Dl             *string `json:"dl"`
+		CreatorID            int64   `json:"creator_id"`
+		Q                    *string `json:"q"`
+		CollectionID         *int64  `json:"collection_id"`
+		CollectionNone       bool    `json:"collection_none"`
+		ExcludeCollectionIDs []int64 `json:"exclude_collection_ids"`
+		Type                 *string `json:"type"`
+		Dl                   *string `json:"dl"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -828,6 +1138,14 @@ func (s *Server) handleBatchWorkIDs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f := workFilter{creatorID: body.CreatorID, collectionID: body.CollectionID, collectionNone: body.CollectionNone}
+	for _, id := range body.ExcludeCollectionIDs {
+		if id > 0 {
+			f.excludeCollectionIDs = append(f.excludeCollectionIDs, id)
+		}
+	}
+	if len(f.excludeCollectionIDs) > 0 {
+		f.collectionID, f.collectionNone = nil, false // exclude 优先
+	}
 	if body.Q != nil {
 		f.q = strings.TrimSpace(*body.Q)
 	}
