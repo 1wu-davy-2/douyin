@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- 阶段 1:前端构建 ----
-FROM node:22-bookworm-slim AS frontend
+FROM node:22-slim-bookworm AS frontend
 WORKDIR /fe
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -21,7 +21,7 @@ RUN CGO_ENABLED=0 go build -o /out/douyin-server ./cmd/server \
  && CGO_ENABLED=0 go build -o /out/import-legacy ./cmd/import-legacy
 
 # ---- 阶段 3:运行时(python3 + node:Go 程序按需拉起侧车执行 F2 签名)----
-FROM python:3.12-bookworm-slim
+FROM python:3.12-slim-bookworm
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \
  && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
