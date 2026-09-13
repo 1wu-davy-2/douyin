@@ -35,8 +35,9 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/creators` | `{profile_url}` → **202** `{creator_id, scan_id}`(异步扫描,SSE 报进度)。URL 支持主页链接或 sec_uid。重复添加返回已有 creator 并同样触发扫描 |
-| GET | `/api/creators` | → `[{id, sec_uid, nickname, avatar_url, profile_url, reported_work_count, works_count, downloaded_count, download_bytes, created_at}]`(按 created_at desc);`download_bytes` = 该博主全部已下载资产的字节总和(SUM assets.size_bytes,kind video+image) |
+| POST | `/api/creators` | `{profile_url, download_root?: string, auto_download?: bool, quality?: string, group?: string, alias?: string}` → **202** `{creator_id, scan_id, creator: {...}}`(异步扫描,SSE 报进度)。可选参数:`download_root` 添加时即设独立下载根(校验同 download-root 端点);`auto_download=true` 为该博主创建 creator 级订阅(interval_minutes 默认 60,quality 默认全局);`group` 初始分组名(空=未分组);`alias` 显示别名。URL 支持主页链接或 sec_uid。重复添加返回已有 creator 并同样触发扫描(可选参数同样生效) |
+| PATCH | `/api/creators/{id}` | `{alias?: string\|null, group?: string\|null}` → `{ok, alias, group}`;alias null/空=清除别名(显示默认昵称),group null/空=移出分组 |
+| GET | `/api/creators` | → `[{id, sec_uid, nickname, alias, group, avatar_url, profile_url, reported_work_count, works_count, downloaded_count, download_bytes, created_at}]`(按 created_at desc);`download_bytes` = 已下载资产字节总和;`alias` 用户设置的显示别名(null=用 nickname);`group` 分组名(null=未分组) |
 | GET | `/api/creators/{id}` | 单个详情,字段同上 + `last_scan: {id, status, pages, new_count, updated_count, empty_pages, completeness, started_at, finished_at, last_error}` |
 | DELETE | `/api/creators/{id}` | 删除博主及其作品/合集/任务记录(不删已下载文件) |
 | PATCH | `/api/creators/{id}/download-root` | `{path: string\|null}` 设置该博主独立下载根目录( null=跟随全局);须为绝对路径,自动创建;→ `{ok, download_root}` |
