@@ -34,3 +34,9 @@ Thumbs.db
 
 # WorkBuddy 本地数据(记忆/会话)
 .workbuddy/
+
+# 外部参考项目(不提交)
+douyin-sparkflow/
+
+# spark-engine 运行时数据(浏览器 profile / 登录态, 绝不入库)
+spark-engine/state/
