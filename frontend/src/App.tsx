@@ -19,6 +19,7 @@ import { LibraryPage } from "./pages/library";
 import { DownloadsPage } from "./pages/downloads";
 import { SubscriptionsPage } from "./pages/subscriptions";
 import { SettingsPage } from "./pages/settings";
+import { SparkPage } from "./pages/spark/spark-page";
 
 function Splash() {
   return (
@@ -52,6 +53,7 @@ function AuthGate() {
           <Route index element={<LibraryPage />} />
           <Route path="downloads" element={<DownloadsPage />} />
           <Route path="subscriptions" element={<SubscriptionsPage />} />
+          <Route path="spark" element={<SparkPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

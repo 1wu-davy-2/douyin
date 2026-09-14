@@ -14,6 +14,8 @@ import { toast } from "sonner";
 import type { CursorPage, Health, Job } from "./types";
 import { qk } from "./queries";
 import { applyScanDone, applyScanProgress } from "../lib/scan-store";
+import { pushSparkLog } from "../lib/spark-log-store";
+import type { SparkAccountStatus } from "./spark-types";
 
 const MAX_BACKOFF_MS = 30_000;
 
@@ -133,6 +135,106 @@ export function useEvents(enabled: boolean): void {
         client.setQueryData<Health>(qk.health, (prev) =>
           prev ? { ...prev, sidecar: data.sidecar } : prev,
         );
+      });
+
+      // ---------- 火花(spark.*) ----------
+      const invalidateSpark = () => {
+        void client.invalidateQueries({ queryKey: ["spark"] });
+      };
+
+      source.addEventListener("spark.account.status", (e) => {
+        const data = JSON.parse((e as MessageEvent<string>).data) as {
+          account_id: number;
+          unique_id: string;
+          status: SparkAccountStatus;
+          last_error: string;
+        };
+        pushSparkLog({
+          kind: "account",
+          accountId: data.account_id,
+          state: data.status,
+          detail: data.last_error,
+          text: `账号 ${data.unique_id} 状态 → ${data.status}${data.last_error ? `(${data.last_error})` : ""}`,
+        });
+        invalidateSpark();
+      });
+
+      source.addEventListener("spark.send.progress", (e) => {
+        const data = JSON.parse((e as MessageEvent<string>).data) as {
+          account_id: number;
+          target: string;
+          state: string;
+          category: string;
+          detail: string;
+        };
+        pushSparkLog({
+          kind: "progress",
+          accountId: data.account_id,
+          target: data.target,
+          state: data.state,
+          category: data.category,
+          detail: data.detail,
+          text: `[${data.target}] ${data.state}${data.category ? ` · ${data.category}` : ""}${data.detail ? ` · ${data.detail}` : ""}`,
+        });
+      });
+
+      source.addEventListener("spark.send.finished", (e) => {
+        const data = JSON.parse((e as MessageEvent<string>).data) as {
+          account_id: number;
+          run_mode: string;
+          strong: number;
+          failed: number;
+          total: number;
+        };
+        pushSparkLog({
+          kind: "finished",
+          accountId: data.account_id,
+          state: data.run_mode,
+          text: `发送批次结束(mode=${data.run_mode}):成功 ${data.strong} · 失败 ${data.failed} · 共 ${data.total}`,
+        });
+        invalidateSpark();
+        if (data.failed > 0) {
+          toast.warning("火花发送批次结束", {
+            description: `成功 ${data.strong} · 失败 ${data.failed} · 共 ${data.total}`,
+          });
+        } else {
+          toast.success("火花发送完成", {
+            description: `成功 ${data.strong} · 共 ${data.total}`,
+          });
+        }
+      });
+
+      source.addEventListener("spark.friends.updated", (e) => {
+        const data = JSON.parse((e as MessageEvent<string>).data) as {
+          account_id: number;
+          unique_id: string;
+          total: number;
+          new: number;
+        };
+        pushSparkLog({
+          kind: "friends",
+          accountId: data.account_id,
+          text: `账号 ${data.unique_id} 好友刷新:共 ${data.total} · 新增 ${data.new}`,
+        });
+        invalidateSpark();
+      });
+
+      source.addEventListener("spark.login.status", (e) => {
+        const data = JSON.parse((e as MessageEvent<string>).data) as {
+          running: boolean;
+          logged_in: boolean;
+          unique_id: string;
+          nickname: string;
+        };
+        pushSparkLog({
+          kind: "login",
+          text: data.logged_in
+            ? `扫码登录成功:${data.nickname}(@${data.unique_id})`
+            : data.running
+              ? "登录会话进行中…"
+              : "登录会话已结束",
+        });
+        invalidateSpark();
       });
     };
 

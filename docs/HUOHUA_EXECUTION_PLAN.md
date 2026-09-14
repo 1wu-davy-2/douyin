@@ -623,10 +623,29 @@ python main.py --port 18788 --token devtoken
 
 ## 12. 执行日志（执行模型填写：勾选 + 决策 + 问题）
 
-- [ ] T0.1 …（逐项勾选）
-- 决策记录：（格式 `日期 | T编号 | 决策 | 原因`）
+**2026-09-14（会话 1）：M0 脚本 + M1 引擎代码完成，commit 554509a + bacdade**
+
+- [x] T0.1 引擎骨架（main.py / app.py / token 中间件 / /health）
+- [x] T0.2 spike 脚本已写好（spike/cookie_spike.py）——**待真人扫码运行验证 Cookie 闭环**
+- [x] T1.1 应用壳（互斥锁 / 统一错误 / task_running）
+- [x] T1.2 core 平移（browser 去 rich+env 化网络模式 / friends / send_state 原样；msg_builder+hitokoto 配置注入；utils/config 裁剪版）
+- [x] T1.3 发送闭环（send_tools.py 2177 行：滚动选好友/输入发送/IM观察器+DOM双重强确认/失败分类/_do_user_task_locked 全闭环；持久化层改内存 user dict）
+- [x] T1.4 /cookies/export + /friends/refresh（冒烟通过）
+- [x] T1.5 登录桥接（login_bridge.py 转发 login_desktop_server:18090；export=身份解析→复制 login-profile→读 Cookie 头）
+- [x] T1.6 /send/run（全局单任务 409；同步等待；冒烟通过）
+- [ ] T1.7 真实账号冒烟 —— 需用户配合扫码（chromium 未安装：`.venv/Scripts/python -m playwright install chromium`）
+- 决策记录：
+  - 09-14 | T1.3 | 上游 `_do_user_task_locked` 整段平移而非重写 | 保留上游踩坑成果（IM 观察器强确认/失败分类/弹窗处理），仅替换持久化层
+  - 09-14 | T1.5 | noVNC 反代延后 | v1 二维码+状态轮询可完成扫码；滑块验证等人工干预场景待补（见待办）
+  - 09-14 | T1.5 | export 采用"复制 login-profile → 账号 profile"方案 | 避免依赖导出结果的 cookie 字段格式（未实测），文件复制最可靠
+  - 09-14 | 环境 | 托管 venv 路径被沙箱拦截，改用仓库根 `.venv`（已 gitignore）| 工具链限制
 - 问题与偏差：
-- 待办（不扩scope，仅记录）：
+  - 结果状态只有 strong/failed 两态（上游语义：weak 不会落盘，确认失败即入 failure_queue）；Go/前端按两态处理，"weak"徽标可删
+  - `/login/export` 身份字段解析为 best-effort（候选键名匹配），**T1.7 真实登录时需核对原始返回并收紧**
+- 待办（不扩 scope，仅记录）：
+  - noVNC WebSocket 反代（远程滑块干预）
+  - Cookie 定期自动重导出（调度器空闲时段触发）
+  - `docs/HUOHUA_EXECUTION_PLAN.md` §4 契约表补 `POST /login/export` 响应字段实测结果
 
 ## 13. 参考文件速查
 
