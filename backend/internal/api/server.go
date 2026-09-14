@@ -12,6 +12,7 @@ import (
 	"douyin/backend/internal/scanner"
 	"douyin/backend/internal/settings"
 	"douyin/backend/internal/sidecar"
+	"douyin/backend/internal/spark"
 	"douyin/backend/internal/uploader"
 	"encoding/json"
 	"log"
@@ -34,6 +35,9 @@ type Deps struct {
 	// Uploader is the MinIO sync service (may be nil: not wired / tests).
 	// Nil handlers answer the test/status endpoints with ok=false / zeros.
 	Uploader *uploader.Uploader
+	// Spark is the 续火花 integration service (may be nil: not wired / tests).
+	// Nil or unconfigured (no DY_SPARK_TOKEN) -> /api/spark/* answers 503.
+	Spark *spark.Service
 }
 
 // Server is the HTTP application.
@@ -70,6 +74,9 @@ func (s *Server) Handler() http.Handler {
 
 	// -- v1.3: per-creator download roots ------------------------------------
 	s.registerCreatorRootRoutes(mux) // creator_roots.go
+
+	// -- spark (续火花) integration -------------------------------------------
+	s.registerSparkRoutes(mux) // spark.go (engine client + scheduler live in internal/spark)
 
 	// Fake CDN for mock mode: the mock provider hands out relative
 	// /mockcdn/... URLs that the downloader resolves against this server.
