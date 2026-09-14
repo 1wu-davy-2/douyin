@@ -56,6 +56,7 @@ COPY --from=backend /out/import-legacy ./import-legacy
 COPY sidecar/main.py ./sidecar/main.py
 
 ENV DY_PORT=8787 \
+    DY_BIND=0.0.0.0 \
     DY_DATA_DIR=/app/data \
     DY_SIDECAR_PYTHON=python3 \
     DY_SIDECAR_PORT=18787

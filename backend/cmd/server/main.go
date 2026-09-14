@@ -165,8 +165,8 @@ func run(ctx context.Context, cfg config.Settings) error {
 	}()
 
 	srv := &http.Server{
-		// Local single-user tool; loopback only per README.
-		Addr: fmt.Sprintf("127.0.0.1:%d", cfg.Port),
+		// 本机单用户工具默认仅 loopback;Docker 部署通过 DY_BIND=0.0.0.0 放开。
+		Addr: fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port),
 		Handler: api.New(api.Deps{
 			Cfg:        cfg,
 			Auth:       authService,

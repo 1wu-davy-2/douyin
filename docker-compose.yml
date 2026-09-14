@@ -10,6 +10,8 @@ services:
       - ${DOWNLOAD_ROOT:-/opt/douyin/down}:/app/data/downloads
     environment:
       DY_PORT: "8787"
+      # 容器内必须监听 0.0.0.0,否则 Docker 端口映射后外部 connection refused
+      DY_BIND: "0.0.0.0"
       DY_DATA_DIR: /app/data
       DY_SIDECAR_PYTHON: python3
       # 默认下载根 = 挂载的宿主机目录(网页设置的 download_root 仍可覆盖)

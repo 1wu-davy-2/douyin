@@ -81,6 +81,7 @@ Mock 模式内置假博主(502 个作品、含图集与动图)与本地假 CDN,�
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `DY_PORT` | 8787 | HTTP 端口 |
+| `DY_BIND` | 127.0.0.1 | HTTP 监听地址(Docker 镜像内默认 0.0.0.0) |
 | `DY_DATA_DIR` | ./data | 数据目录(数据库、下载、Cookie) |
 | `DY_MOCK` | 0 | 1 = Mock 模式(内置假数据 + 假 CDN) |
 | `DY_SIDECAR_PORT` | 18787 | 侧车端口 |

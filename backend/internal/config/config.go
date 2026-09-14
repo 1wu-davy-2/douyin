@@ -3,6 +3,8 @@
 // Environment variables (all optional):
 //
 //	DY_PORT                 HTTP listen port (default 8787)
+//	DY_BIND                 HTTP listen address (default "127.0.0.1";
+//	                        Docker 部署设为 "0.0.0.0" 才能从容器外访问)
 //	DY_DATA_DIR             data directory (default ./data)
 //	DY_DOWNLOAD_ROOT        default download root (runtime setting may override)
 //	DY_DOWNLOAD_LIMIT_GB    total downloaded-size cap in GB; 0 = unlimited (default 20)
@@ -29,6 +31,7 @@ import (
 // Settings is the resolved process configuration.
 type Settings struct {
 	Port         int    // DY_PORT
+	Bind         string // DY_BIND (listen host; "127.0.0.1" default)
 	DataDir      string // DY_DATA_DIR
 	DownloadRoot string // DY_DOWNLOAD_ROOT (empty -> <data_dir>/downloads)
 	DownloadLimitGB int // DY_DOWNLOAD_LIMIT_GB (0 = unlimited)
@@ -45,6 +48,7 @@ type Settings struct {
 func Load() Settings {
 	s := Settings{
 		Port:               envInt("DY_PORT", 8787),
+		Bind:               envNonEmpty("DY_BIND", "127.0.0.1"),
 		DataDir:            envNonEmpty("DY_DATA_DIR", "./data"),
 		DownloadRoot:       envNonEmpty("DY_DOWNLOAD_ROOT", ""),
 		DownloadLimitGB:    envInt("DY_DOWNLOAD_LIMIT_GB", 20),

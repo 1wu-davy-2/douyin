@@ -54,6 +54,7 @@ Dockerfile 已做三层优化,重复构建(依赖不变、只改业务代码)时
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `DY_PORT` | 8787 | HTTP 端口 |
+| `DY_BIND` | 127.0.0.1 | HTTP 监听地址;容器内已设 `0.0.0.0`(否则端口映射后外部 connection refused) |
 | `DY_DATA_DIR` | /app/data | 数据目录 |
 | `DY_DOWNLOAD_ROOT` | `<data>/downloads` | 默认下载根(env 层;网页设置的 download_root 优先) |
 | `DY_SIDECAR_PYTHON` | 自动探测 | 容器内已设为 `python3` |
