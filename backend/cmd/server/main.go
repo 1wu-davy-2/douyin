@@ -199,6 +199,7 @@ func run(ctx context.Context, cfg config.Settings) error {
 			Scanner:    scanSvc,
 			Downloader: dl,
 			Uploader:   up,
+			Spark:      sparkSvc,
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
