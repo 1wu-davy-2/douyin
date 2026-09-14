@@ -15,10 +15,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
-	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -196,6 +196,8 @@ func (m *Manager) startAttempt(gen int, token string, att *attempt) {
 	// Inherit the environment so DY_DATA_DIR reaches the sidecar's cookie reader.
 	cmd.Stdout = m.stdout
 	cmd.Stderr = m.stdout
+	// Own process group on Unix so the whole tree can be killed at once.
+	setNewProcessGroup(cmd)
 
 	if err := cmd.Start(); err != nil {
 		m.failAttempt(gen, att, fmt.Errorf("sidecar: start %s: %w", m.pythonPath, err))
@@ -217,7 +219,7 @@ func (m *Manager) startAttempt(gen int, token string, att *attempt) {
 	for {
 		select {
 		case <-m.stopCh:
-			m.killTree(pid)
+			killProcessTree(pid)
 			m.failAttempt(gen, att, errors.New("sidecar: startup aborted (server shutting down)"))
 			return
 		case waitErr := <-waitCh:
@@ -253,7 +255,7 @@ func (m *Manager) startAttempt(gen int, token string, att *attempt) {
 		}
 
 		if time.Now().After(deadline) {
-			m.killTree(pid)
+			killProcessTree(pid)
 			m.failAttempt(gen, att, fmt.Errorf("sidecar: not healthy within %s", startupDeadline))
 			return
 		}
@@ -311,7 +313,16 @@ func (m *Manager) idleReaper() {
 			timeout := time.Duration(m.idleTimeout.Load())
 			if timeout > 0 && time.Since(time.Unix(0, m.lastUse.Load())) > timeout {
 				log.Printf("[sidecar] idle for > %s, killing pid=%d", timeout, pid)
-				m.killTree(pid)
+				killProcessTree(pid)
+				// Confirm the port is actually free before flipping to stopped:
+				// a kill that silently failed (e.g. missing binary, EPERM) must
+				// not be mistaken for success — the orphan would keep holding
+				// the port and every restart would die with "Address already in
+				// use" until the container is recreated.
+				if !m.awaitDeath(gen) {
+					log.Printf("[sidecar] port %d still listening after kill (pid=%d); keeping state, retrying next tick", m.port, pid)
+					continue
+				}
 				m.mu.Lock()
 				if m.gen == gen && m.state == stateRunning {
 					m.state = stateStopped
@@ -334,7 +345,7 @@ func (m *Manager) Stop() {
 	m.mu.Unlock()
 
 	if state == stateRunning || state == stateStarting {
-		m.killTree(pid)
+		killProcessTree(pid)
 	}
 	m.wg.Wait()
 
@@ -345,21 +356,30 @@ func (m *Manager) Stop() {
 	log.Printf("[sidecar] stopped")
 }
 
-// killTree kills the process and all of its children. On Windows that needs
-// taskkill /T; elsewhere a plain kill is used.
-func (m *Manager) killTree(pid int) {
-	if pid <= 0 {
-		return
-	}
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
-	} else {
-		cmd = exec.Command("kill", "-9", strconv.Itoa(pid))
-	}
-	if out, err := cmd.CombinedOutput(); err != nil {
-		// "process not found" simply means it already died — fine.
-		log.Printf("[sidecar] kill pid=%d: %v: %s", pid, err, string(out))
+// awaitDeath polls until the sidecar port stops accepting connections (up to
+// ~3s) and reports whether the port is free — the process is presumed dead.
+// If the generation changed or the state moved on meanwhile (e.g. the crash
+// watcher already flipped to stopped and a new sidecar started), it reports
+// success: there is nothing left to confirm for this generation.
+func (m *Manager) awaitDeath(gen int) bool {
+	addr := fmt.Sprintf("127.0.0.1:%d", m.port)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", addr, 250*time.Millisecond)
+		if err != nil {
+			return true // connection refused: nothing listening anymore
+		}
+		_ = conn.Close()
+		m.mu.Lock()
+		superseded := m.gen != gen || m.state != stateRunning
+		m.mu.Unlock()
+		if superseded {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
 }
 
