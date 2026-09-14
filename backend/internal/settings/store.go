@@ -518,6 +518,13 @@ func (s *Store) writeCookieFile(cookie string) error {
 	return nil
 }
 
+// WriteCookieFile is the exported form of writeCookieFile, used by the spark
+// integration: engine-exported login cookies feed the sidecar through the
+// exact same atomic path (contract: <data_dir>/.cookie, hot-read per request).
+func (s *Store) WriteCookieFile(cookie string) error {
+	return s.writeCookieFile(cookie)
+}
+
 // ------------------------------------------------------------------ helpers --
 
 // writeFileAtomic writes via a temp file + rename so the sidecar never reads
