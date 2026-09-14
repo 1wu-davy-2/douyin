@@ -31,3 +31,6 @@ __pycache__/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# WorkBuddy 本地数据(记忆/会话)
+.workbuddy/
