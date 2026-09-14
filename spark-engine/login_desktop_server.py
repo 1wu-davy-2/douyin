@@ -365,7 +365,13 @@ class LoginDesktopManager:
                     pass
                 self.playwright = None
             if clear_profile and PROFILE_DIR.exists():
-                shutil.rmtree(PROFILE_DIR, ignore_errors=True)
+                try:
+                    # ignore_errors=True 处理普通 PermissionError；但某些托管环境
+                    # (如沙箱 safe-delete 守卫) 会抛 SystemExit，必须一并兜住，
+                    # 否则 stop() 中断、浏览器句柄泄漏、后续会话全部脏掉。
+                    shutil.rmtree(PROFILE_DIR, ignore_errors=True)
+                except BaseException:  # noqa: BLE001 - 清理失败不能阻断会话回收
+                    pass
             self._status_cache = None
             self._status_checked_at = 0.0
 

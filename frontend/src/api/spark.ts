@@ -96,6 +96,21 @@ export const closeSparkLogin = () =>
   api<{ status: string }>("/api/spark/login/close", { method: "POST", json: {} });
 /** 二维码图片地址(t 为时间戳防缓存)。 */
 export const sparkLoginQrUrl = (t: number) => `/api/spark/login/qr?t=${t}`;
+/**
+ * 轮询登录二维码:引擎 /login/qr 在二维码尚未渲染时返回 202(继续等)、
+ * 过期返回 409(需调 refresh-qr)、就绪返回 PNG。走 blob URL 展示,
+ * 避免 <img src> 直怼 202 JSON 渲染成裂图。
+ */
+export type SparkLoginQr = { state: "pending" } | { state: "expired" } | { state: "ready"; url: string };
+export async function fetchSparkLoginQr(): Promise<SparkLoginQr> {
+  const res = await fetch(`/api/spark/login/qr?t=${Date.now()}`, { cache: "no-store" });
+  if (res.status === 202) return { state: "pending" };
+  if (res.status === 409) return { state: "expired" };
+  if (!res.ok) throw new Error(`二维码加载失败 (${res.status})`);
+  const blob = await res.blob();
+  if (!blob.type.startsWith("image/")) return { state: "pending" };
+  return { state: "ready", url: URL.createObjectURL(blob) };
+}
 /** noVNC 远程桌面 iframe 地址(滑块验证等人工干预)。 */
 export const sparkLoginVncUrl = () =>
   "/api/spark/login/vnc/vnc.html?autoconnect=1&resize=scale&path=api/spark/login/vnc/websockify";

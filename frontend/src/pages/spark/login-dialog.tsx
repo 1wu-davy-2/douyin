@@ -13,11 +13,11 @@ import {
   createSparkAccount,
   exportSparkCookies,
   exportSparkLogin,
+  fetchSparkLoginQr,
   getSparkLoginStatus,
   openSparkLogin,
   refreshSparkFriends,
   refreshSparkQr,
-  sparkLoginQrUrl,
   sparkLoginVncUrl,
 } from "../../api/spark";
 import { Button } from "../../components/ui/button";
@@ -38,12 +38,13 @@ interface LoginDialogProps {
 
 export function LoginDialog({ open, onOpenChange, onCreated }: LoginDialogProps) {
   const queryClient = useQueryClient();
-  const [qrTick, setQrTick] = useState(() => Date.now());
   const [vncOpen, setVncOpen] = useState(false);
   // 每次打开会话只跑一次导出+建档
   const doneRef = useRef(false);
   // 记录本次会话是否已成功 open(失败时禁用轮询报错展示)
   const openFailedRef = useRef(false);
+  // 已创建的 blob URL,替换/卸载时 revoke 防泄漏
+  const lastQrUrlRef = useRef<string | null>(null);
 
   // 打开时启动登录会话
   useEffect(() => {
@@ -51,12 +52,12 @@ export function LoginDialog({ open, onOpenChange, onCreated }: LoginDialogProps)
     doneRef.current = false;
     openFailedRef.current = false;
     openSparkLogin()
-      .then(() => setQrTick(Date.now()))
+      .then(() => queryClient.invalidateQueries({ queryKey: ["spark", "login-qr"] }))
       .catch((e) => {
         openFailedRef.current = true;
         toast.error("启动登录会话失败", { description: e.message });
       });
-  }, [open]);
+  }, [open, queryClient]);
 
   const status = useQuery({
     queryKey: ["spark", "login-status"],
@@ -65,6 +66,34 @@ export function LoginDialog({ open, onOpenChange, onCreated }: LoginDialogProps)
     refetchInterval: 5000,
     retry: false,
   });
+
+  const s0 = status.data;
+  const showQr = Boolean(open && s0?.running && !s0.logged_in);
+
+  // 二维码轮询:202(生成中)2.5s 重试;就绪后 15s 换新截图保持有效
+  const qr = useQuery({
+    queryKey: ["spark", "login-qr"],
+    queryFn: fetchSparkLoginQr,
+    enabled: showQr,
+    refetchInterval: (q) => (q.state.data?.state === "ready" ? 15000 : 2500),
+    retry: false,
+  });
+
+  // 旧的 blob URL 及时回收
+  const qrUrl = qr.data?.state === "ready" ? qr.data.url : null;
+  useEffect(() => {
+    if (qrUrl && qrUrl !== lastQrUrlRef.current) {
+      const prev = lastQrUrlRef.current;
+      lastQrUrlRef.current = qrUrl;
+      if (prev) URL.revokeObjectURL(prev);
+    }
+  }, [qrUrl]);
+  useEffect(
+    () => () => {
+      if (lastQrUrlRef.current) URL.revokeObjectURL(lastQrUrlRef.current);
+    },
+    [],
+  );
 
   // 登录成功 → 导出 + 建档(一次性)
   useEffect(() => {
@@ -99,7 +128,7 @@ export function LoginDialog({ open, onOpenChange, onCreated }: LoginDialogProps)
 
   const refreshMut = useMutation({
     mutationFn: refreshSparkQr,
-    onSuccess: () => setQrTick(Date.now()),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["spark", "login-qr"] }),
     onError: (e) => toast.error("刷新二维码失败", { description: e.message }),
   });
 
@@ -110,7 +139,6 @@ export function LoginDialog({ open, onOpenChange, onCreated }: LoginDialogProps)
   };
 
   const s = status.data;
-  const showQr = Boolean(open && s?.running && !s.logged_in);
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -138,11 +166,22 @@ export function LoginDialog({ open, onOpenChange, onCreated }: LoginDialogProps)
             </div>
           ) : showQr ? (
             <>
-              <img
-                src={sparkLoginQrUrl(qrTick)}
-                alt="抖音登录二维码"
-                className="h-56 w-56 rounded-lg border border-border bg-white object-contain p-2"
-              />
+              {qr.data?.state === "ready" ? (
+                <img
+                  src={qr.data.url}
+                  alt="抖音登录二维码"
+                  className="h-56 w-56 rounded-lg border border-border bg-white object-contain p-2"
+                />
+              ) : qr.data?.state === "expired" ? (
+                <div className="flex h-56 w-56 items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">
+                  二维码已过期,点击下方刷新
+                </div>
+              ) : (
+                <div className="flex h-56 w-56 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border">
+                  <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                  <p className="text-xs text-muted-foreground">二维码生成中…</p>
+                </div>
+              )}
               <Button
                 variant="outline"
                 size="sm"
