@@ -4,7 +4,7 @@
  */
 import { NavLink, Outlet } from "react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Clapperboard, Download, LogOut, Radar, Settings, Library } from "lucide-react";
+import { Clapperboard, Download, Flame, LogOut, Radar, Settings, Library } from "lucide-react";
 import { toast } from "sonner";
 import { logout } from "../api/endpoints";
 import { useAuthStatus } from "../api/queries";
@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   { to: "/", label: "作品库", icon: Library, end: true },
   { to: "/downloads", label: "下载", icon: Download, end: false },
   { to: "/subscriptions", label: "监控", icon: Radar, end: false },
+  { to: "/spark", label: "火花", icon: Flame, end: false },
   { to: "/settings", label: "设置", icon: Settings, end: false },
 ] as const;
 

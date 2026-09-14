@@ -33,7 +33,12 @@ import (
 	"douyin/backend/internal/scheduler"
 	"douyin/backend/internal/settings"
 	"douyin/backend/internal/sidecar"
+	"douyin/backend/internal/spark"
 	"douyin/backend/internal/uploader"
+
+	// Embed the tz database so Asia/Shanghai window math works on hosts
+	// without a system zoneinfo (Windows, slim containers).
+	_ "time/tzdata"
 )
 
 // modeArg scans the raw argument list for -mode/--mode (space or = form) and
@@ -136,14 +141,14 @@ func run(ctx context.Context, cfg config.Settings) error {
 	// left downloading by a previous process, then start the pool and wire it
 	// as the scanner's auto-download enqueuer.
 	dl := downloader.New(ctx, downloader.Deps{
-		DB:       database,
-		Bus:      bus,
-		Store:    store,
-		Source:   resolver,
-		DataDir:  cfg.DataDir,
-		BaseURL:  fmt.Sprintf("http://127.0.0.1:%d", cfg.Port),
-		Mock:     cfg.Mock,
-		Uploader: up,
+		DB:              database,
+		Bus:             bus,
+		Store:           store,
+		Source:          resolver,
+		DataDir:         cfg.DataDir,
+		BaseURL:         fmt.Sprintf("http://127.0.0.1:%d", cfg.Port),
+		Mock:            cfg.Mock,
+		Uploader:        up,
 		DownloadLimitGB: cfg.DownloadLimitGB,
 	})
 	if _, err := dl.RecoverStale(); err != nil {
@@ -164,6 +169,22 @@ func run(ctx context.Context, cfg config.Settings) error {
 		sched.Run(ctx)
 	}()
 
+	// Spark (续火花) integration: engine client + SQLite store + 30s send
+	// scheduler. Disabled when DY_SPARK_TOKEN is empty (all /api/spark/*
+	// endpoints then answer 503 "spark not configured").
+	sparkSvc := spark.New(cfg, database, bus, store)
+	var sparkWG sync.WaitGroup
+	if sparkSvc.Configured() {
+		log.Printf("spark integration enabled: engine=%s", cfg.SparkURL)
+		sparkWG.Add(1)
+		go func() {
+			defer sparkWG.Done()
+			sparkSvc.Run(ctx)
+		}()
+	} else {
+		log.Printf("spark integration disabled (DY_SPARK_TOKEN empty)")
+	}
+
 	srv := &http.Server{
 		// 本机单用户工具默认仅 loopback;Docker 部署通过 DY_BIND=0.0.0.0 放开。
 		Addr: fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port),
@@ -178,6 +199,7 @@ func run(ctx context.Context, cfg config.Settings) error {
 			Scanner:    scanSvc,
 			Downloader: dl,
 			Uploader:   up,
+			Spark:      sparkSvc,
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -214,6 +236,7 @@ func run(ctx context.Context, cfg config.Settings) error {
 		_ = srv.Close()
 	}
 	schedWG.Wait()
+	sparkWG.Wait()
 	scanSvc.WaitIdle(5 * time.Second)
 	// Stop the downloader last: scans may enqueue auto-download jobs while
 	// finalizing. Stop cancels running transfers (their rows stay

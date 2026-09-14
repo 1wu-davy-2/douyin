@@ -24,6 +24,13 @@ const (
 	TypeScanProgress     = "scan.progress"
 	TypeScanDone         = "scan.done"
 	TypeProviderStatus   = "provider.status"
+
+	// Spark (续火花) integration events — docs/HUOHUA_EXECUTION_PLAN.md §6.6.
+	TypeSparkAccountStatus  = "spark.account.status"
+	TypeSparkSendProgress   = "spark.send.progress"
+	TypeSparkSendFinished   = "spark.send.finished"
+	TypeSparkFriendsUpdated = "spark.friends.updated"
+	TypeSparkLoginStatus    = "spark.login.status"
 )
 
 // Event is a single bus message. Data carries one of the payload structs
@@ -82,6 +89,42 @@ type ProviderStatus struct {
 	PausedUntil *string `json:"paused_until"`
 }
 
+// SparkAccountStatus is emitted whenever an account's run state changes.
+type SparkAccountStatus struct {
+	AccountID int64  `json:"account_id"`
+	Status    string `json:"status"` // idle|sending|login_required|cooldown|error
+	Detail    string `json:"detail"`
+}
+
+// SparkSendProgress is emitted per send result (target-level).
+type SparkSendProgress struct {
+	AccountID int64  `json:"account_id"`
+	Target    string `json:"target"`
+	State     string `json:"state"` // strong|failed
+	Category  string `json:"category"`
+	Detail    string `json:"detail"`
+}
+
+// SparkSendFinished is emitted once per account send run.
+type SparkSendFinished struct {
+	AccountID int64 `json:"account_id"`
+	Strong    int   `json:"strong"`
+	Weak      int   `json:"weak"`
+	Failed    int   `json:"failed"`
+}
+
+// SparkFriendsUpdated is emitted after a friends refresh replaced the table.
+type SparkFriendsUpdated struct {
+	AccountID int64 `json:"account_id"`
+	Count     int   `json:"count"`
+}
+
+// SparkLoginStatus is emitted on login flow state changes.
+type SparkLoginStatus struct {
+	LoggedIn bool   `json:"logged_in"`
+	UniqueID string `json:"unique_id"`
+}
+
 // subscriberBuffer is the per-subscriber channel capacity (contract: 256).
 const subscriberBuffer = 256
 
@@ -126,7 +169,7 @@ func (b *Bus) Subscribe(ctx context.Context) <-chan Event {
 // event is worse than briefly blocking its publisher.
 func mustDeliver(eventType string) bool {
 	switch eventType {
-	case TypeDownloadProgress, TypeScanProgress:
+	case TypeDownloadProgress, TypeScanProgress, TypeSparkSendProgress:
 		return false
 	default:
 		return true

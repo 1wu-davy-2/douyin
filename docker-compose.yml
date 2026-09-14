@@ -18,7 +18,24 @@ services:
       DY_DOWNLOAD_ROOT: /app/data/downloads
       # 下载总容量上限(GB),0 = 不限制。可用环境变量调整
       DY_DOWNLOAD_LIMIT_GB: "20"
+      # 火花引擎(续火花):未启用 spark profile 时留空 → /api/spark/* 返回 503 空态
+      DY_SPARK_URL: "${DY_SPARK_URL:-http://spark-engine:18788}"
+      DY_SPARK_TOKEN: "${DY_SPARK_TOKEN:-}"
     restart: unless-stopped
+
+  # 可选:火花引擎(--profile spark 启用,见 docs/HUOHUA_EXECUTION_PLAN.md §8)
+  spark-engine:
+    build: { context: ./spark-engine, dockerfile: Dockerfile }
+    container_name: spark-engine
+    profiles: ["spark"]
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      SPARK_ENGINE_PORT: "18788"
+      # 必填:与 DY_SPARK_TOKEN 同值(写在 .env),引擎凭它拒绝无 token 请求
+      SPARK_ENGINE_TOKEN: ${DY_SPARK_TOKEN:?set_DY_SPARK_TOKEN_in_.env}
+    volumes:
+      - spark-state:/app/state
 
   # 可选:本地 MinIO(配合设置页的 MinIO 同步)
   # minio:
@@ -32,3 +49,4 @@ services:
 
 volumes:
   douyin-data:
+  spark-state:

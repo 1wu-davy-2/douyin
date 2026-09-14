@@ -147,9 +147,43 @@ data: {"scan_id":5,"creator_id":1,"status":"succeeded"|"partial"|"failed","pages
 
 event: provider.status
 data: {"sidecar":"running","risk_paused":false,"paused_until":null}
+
+event: spark.account.status
+data: {"account_id":1,"unique_id":"user123","status":"idle"|"sending"|"login_required"|"cooldown"|"error","last_error":""}
+
+event: spark.send.progress
+data: {"account_id":1,"target":"user456","state":"strong"|"failed","category":"","detail":""}
+
+event: spark.send.finished
+data: {"account_id":1,"run_mode":"manual"|"manual_failed"|"manual_unsent"|"scheduled","strong":10,"failed":2,"total":12}
+
+event: spark.friends.updated
+data: {"account_id":1,"unique_id":"user123","total":200,"new":3}
+
+event: spark.login.status
+data: {"running":true,"logged_in":false,"unique_id":"","nickname":""}
 ```
 
 规则:每 15s 发 `: ping` 保活;客户端重连指数退避;`download.progress` 仅对 downloading 任务、节流 1s 一条;事件总线缓冲 256,慢消费者丢弃 progress 类事件(状态类必达)。
+
+## 火花 Spark(续火花;引擎未配置时全部返回 503 `spark not configured`)
+
+前置:`DY_SPARK_TOKEN` 非空(引擎地址 `DY_SPARK_URL`,默认 `http://127.0.0.1:18788`)。业务状态全部存 SQLite(Go 是唯一写者),引擎只做浏览器动作。错误映射:引擎 409 → 409(已有任务在跑);引擎不可达 → 502。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/spark/overview` | 引擎健康(3s 探测,坏引擎降级 `ok:false` 不 500)+ 账号列表 + 今日 strong/weak/failed 计数 + 窗口状态 |
+| GET | `/api/spark/engine/health` | 引擎 `/health` 直通 |
+| GET / POST | `/api/spark/accounts` | 列表 / 新建(`{unique_id, username?, nickname?, profile_name?}`,重复 unique_id → 409) |
+| PATCH / DELETE | `/api/spark/accounts/{id}` | `PATCH {enabled?, nickname?}`;DELETE 级联删好友(记录保留) |
+| GET | `/api/spark/accounts/{id}/friends?selected=&with_today=1` | 好友列表;`with_today=1` 合并今日状态 `today_state`("" / `strong` / `failed[:分类]`) |
+| POST | `/api/spark/accounts/{id}/friends/refresh` | 引擎扫好友 → 事务合并(保选中,新增默认不选)→ SSE friends.updated |
+| PATCH | `/api/spark/accounts/{id}/friends` | `{updates:[{key,selected}]}` 批量勾选 |
+| POST | `/api/spark/send/run` | `{mode:"now"\|"failed"\|"unsent", account_ids?}`;异步执行,SSE 推进度;409=已有任务 |
+| GET | `/api/spark/records?account_id=&cursor=&limit≤100` | 发送记录游标分页(DESC),`next_cursor:0` = 末页 |
+| GET / PUT | `/api/spark/settings` | 发送配置(`messageTemplate/messageVariants/hitokotoTypes/sendWindow/sendStrategy/friendScan/accountFailurePause`);PUT 后 Normalize:消息间隔下限钳 25s(风控红线)、窗口交叉重置 |
+| POST | `/api/spark/cookies/export` | `{account_id}` 引擎导出 Cookie → 写 `data/.cookie`(帧藏侧车热加载)→ `{cookie_count}` |
+| * | `/api/spark/login/*` | 反代引擎登录桌面:`open/qr(PNG)/refresh-qr/status/export/close` + `vnc/*`(noVNC 静态资产 + websockify WebSocket 隧道),认证同业务端点 |
 
 ## 静态前端
 

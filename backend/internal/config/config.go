@@ -16,6 +16,9 @@
 //	DY_SIDECAR_IDLE_TIMEOUT idle timeout for the sidecar process,
 //	                        e.g. "10m" or plain minutes "10" (default 10m)
 //	DY_DB_PATH              SQLite file path override (default <data_dir>/app.db)
+//	DY_SPARK_URL            spark engine base URL (default http://127.0.0.1:18788)
+//	DY_SPARK_TOKEN          spark engine token; empty disables the whole
+//	                        /api/spark/* surface (503 "spark not configured")
 package config
 
 import (
@@ -42,6 +45,9 @@ type Settings struct {
 	SidecarIdleTimeout time.Duration // DY_SIDECAR_IDLE_TIMEOUT
 
 	DBPath string // DY_DB_PATH or <DataDir>/app.db
+
+	SparkURL   string // DY_SPARK_URL (default http://127.0.0.1:18788)
+	SparkToken string // DY_SPARK_TOKEN (empty = spark surface disabled)
 }
 
 // Load reads the environment and resolves all settings.
@@ -56,6 +62,8 @@ func Load() Settings {
 		SidecarPort:        envInt("DY_SIDECAR_PORT", 18787),
 		SidecarPython:      strings.TrimSpace(os.Getenv("DY_SIDECAR_PYTHON")),
 		SidecarIdleTimeout: envDurationMinutes("DY_SIDECAR_IDLE_TIMEOUT", 10*time.Minute),
+		SparkURL:           envNonEmpty("DY_SPARK_URL", "http://127.0.0.1:18788"),
+		SparkToken:         strings.TrimSpace(os.Getenv("DY_SPARK_TOKEN")),
 	}
 
 	if v := strings.TrimSpace(os.Getenv("DY_DB_PATH")); v != "" {
