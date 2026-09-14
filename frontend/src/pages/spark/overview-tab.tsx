@@ -58,7 +58,8 @@ export function OverviewTab() {
     );
   }
 
-  const { engine, accounts, today, window: win } = overview.data;
+  const { engine, today, window: win } = overview.data;
+  const accounts = overview.data.accounts ?? [];
 
   return (
     <div className="space-y-6">

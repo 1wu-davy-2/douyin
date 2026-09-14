@@ -139,7 +139,7 @@ func (s *Service) Overview(ctx context.Context) Overview {
 	}
 
 	accounts, err := s.store.ListAccounts()
-	if err == nil {
+	if err == nil && accounts != nil {
 		out.Accounts = accounts
 	}
 	today := s.LocalDate(time.Now())

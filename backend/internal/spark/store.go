@@ -151,7 +151,8 @@ func (s *Store) ListAccounts() ([]Account, error) {
 		return nil, fmt.Errorf("spark: list accounts: %w", err)
 	}
 	defer rows.Close()
-	var out []Account
+	// 非 nil 保证 JSON 序列化为 [] 而非 null(前端契约:列表恒为数组)。
+	out := make([]Account, 0)
 	for rows.Next() {
 		a, err := scanAccount(rows.Scan)
 		if err != nil {
@@ -375,7 +376,7 @@ func (s *Store) ListFriends(accountID int64, selected *bool, localDate string) (
 		return nil, fmt.Errorf("spark: list friends: %w", err)
 	}
 	defer rows.Close()
-	var out []FriendToday
+	out := make([]FriendToday, 0) // 非 nil → JSON []
 	for rows.Next() {
 		var f FriendToday
 		var sel int
@@ -479,7 +480,7 @@ func (s *Store) ListSendRecords(accountID *int64, cursor int64, limit int) ([]Se
 		return nil, 0, fmt.Errorf("spark: list send records: %w", err)
 	}
 	defer rows.Close()
-	var out []SendRecord
+	out := make([]SendRecord, 0) // 非 nil → JSON []
 	for rows.Next() {
 		var r SendRecord
 		if err := rows.Scan(&r.ID, &r.AccountID, &r.AccountLabel, &r.FriendKey, &r.Message,
