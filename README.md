@@ -17,6 +17,7 @@
 - **监控订阅**:按间隔定时扫描并自动下载新作品,可设扫描并发(1-5);展示监控期间新增与已下载数
 - **存储**:全局下载根目录 + 每博主独立路径覆盖;资产按绝对路径记录,搬迁不失效
 - **通知**:SMTP 邮件(新作品 / 下载失败)
+- **火花**(可选,`--profile spark`):抖音好友自动续火花——扫码登录(容器内 noVNC 桌面,可过滑块)、勾选好友、手动/定时发送(确定性散布调度 + 今日失败补发 + 失败冷却),登录态可一键同步给归档侧车
 
 ## 架构
 
@@ -26,6 +27,9 @@ React SPA ──HTTP/SSE──> Go 后端(单二进制,嵌入前端,常驻 ~30MB
                               ▼
                   Python 侧车(F2 签名,仅 3 个数据端点)──> 抖音 web API
 Go 后端 ──直连 CDN 下载(不走 Python)
+
+[可选] spark-engine(Python FastAPI + Playwright,X-Engine-Token)──> 抖音消息动作
+    ▲ Go 是 SQLite 唯一写者;/api/spark/* 走 authGuard;/api/spark/login/* 反代登录桌面
 ```
 
 - **Go 主后端**:API、扫描器、下载 worker 池、SSE 推送、SQLite(modernc.org 纯 Go 驱动,免 CGO)
@@ -95,8 +99,9 @@ douyin/
 ├─ backend/          Go 主后端(cmd/server、cmd/import-legacy、internal/*)
 ├─ sidecar/          Python 签名侧车(main.py + requirements.txt)
 ├─ frontend/         React SPA(Vite + Tailwind + Radix + TanStack Query)
+├─ spark-engine/     火花引擎(FastAPI + Playwright,可选,Docker 部署)
 ├─ scripts/          dev.ps1 / build.ps1
-└─ docs/             api.md(接口契约)、PROGRESS.md(开发进度)
+└─ docs/             api.md(接口契约)、PROGRESS.md(开发进度)、HUOHUA_EXECUTION_PLAN.md(火花方案)
 ```
 
 ## 测试

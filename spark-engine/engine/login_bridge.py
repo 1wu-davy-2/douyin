@@ -10,7 +10,9 @@
     3. 把登录 profile 目录整体复制为账号 profile（uid-{unique_id}）
     4. 从账号 profile 读 Cookie → 拼成 Cookie 头字符串返回
       （Go 收到后写 data/.cookie，帧藏 F2 侧车热加载 → 归档复用登录态）
-- noVNC 远程桌面反代（滑块验证等人工干预场景）留待后续版本（见执行计划 §12 待办）。
+- noVNC 远程桌面反代（/login/vnc/*，平移上游 webui/app.py 的 login-desktop/proxy 段）：
+  HTTP 资产转发到 websockify 的静态 noVNC 目录；WebSocket 双向中继到 websockify。
+  引擎的 token 中间件只覆盖 HTTP，WS 端点自行校验 X-Engine-Token（Go 反代会带上）。
 """
 
 from __future__ import annotations
@@ -19,12 +21,17 @@ import asyncio
 import os
 import shutil
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+from urllib.parse import quote
 
 import requests
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response
+import websockets
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from pydantic import BaseModel
+from websockets.exceptions import ConnectionClosed
 
 from engine.endpoints_browser import _extract_douyin_cookie_header, profile_context
 from engine.runtime import runtime
@@ -34,6 +41,12 @@ from utils.config import profile_root
 router = APIRouter()
 
 LD_BASE = os.getenv("SPARKFLOW_LOGIN_DESKTOP_API_URL", "http://127.0.0.1:18090").rstrip("/")
+NOVNC_HTTP_URL = os.getenv(
+    "SPARKFLOW_LOGIN_DESKTOP_NOVNC_URL", "http://127.0.0.1:8788"
+).rstrip("/")
+NOVNC_WS_URL = os.getenv(
+    "SPARKFLOW_LOGIN_DESKTOP_NOVNC_WS_URL", "ws://127.0.0.1:8788/websockify"
+)
 LOGIN_PROFILE_DIR = Path(
     os.getenv("LOGIN_PROFILE_DIR")
     or str(Path(profile_root()).parent / "login-profile")
@@ -190,3 +203,116 @@ async def login_export():
             }
         finally:
             runtime.mark_end()
+
+
+# ---------- noVNC 远程桌面反代(/login/vnc/*,平移上游 webui/app.py proxy 段) ----------
+
+
+def _fetch_novnc_asset(asset_path: str, query: str = ""):
+    safe_path = quote(str(asset_path or "vnc.html").lstrip("/"), safe="/._-")
+    url = f"{NOVNC_HTTP_URL}/{safe_path}"
+    if query:
+        url = f"{url}?{query}"
+    request = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=20) as upstream:
+            headers = {
+                key: value
+                for key, value in upstream.headers.items()
+                if key.lower()
+                in {"content-type", "content-encoding", "cache-control", "etag", "last-modified"}
+            }
+            return upstream.status, headers, upstream.read()
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise RuntimeError(f"noVNC proxy failed: {exc}") from exc
+
+
+@router.get("/login/vnc")
+async def login_vnc_root():
+    """根路径重定向到 noVNC 页面(path 参数指向引擎侧 WS 反代)。"""
+    return RedirectResponse(
+        "/login/vnc/vnc.html?autoconnect=1&resize=scale&view_only=0&path=login/vnc/websockify",
+        status_code=307,
+    )
+
+
+@router.get("/login/vnc/{asset_path:path}")
+async def login_vnc_asset(asset_path: str, request: Request):
+    try:
+        status, headers, content = await asyncio.to_thread(
+            _fetch_novnc_asset, asset_path, request.url.query
+        )
+        return Response(content=content, status_code=status, headers=headers)
+    except RuntimeError as exc:
+        return PlainTextResponse(str(exc), status_code=502)
+
+
+async def _run_ws_relays(*coroutines):
+    tasks = {asyncio.create_task(coro) for coro in coroutines}
+    try:
+        _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, (ConnectionClosed, WebSocketDisconnect, asyncio.CancelledError)):
+                continue
+            if isinstance(result, BaseException):
+                raise result
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@router.websocket("/login/vnc/websockify")
+async def login_vnc_websockify(websocket: WebSocket):
+    """noVNC WebSocket 双向中继。token 中间件不覆盖 WS,这里自行校验。"""
+    expected = str(os.getenv("SPARK_ENGINE_TOKEN", "")).strip()
+    provided = websocket.headers.get("x-engine-token", "") or str(
+        websocket.query_params.get("token", "")
+    )
+    if not expected or provided != expected:
+        await websocket.close(code=4401)
+        return
+
+    requested_protocols = [
+        item.strip()
+        for item in websocket.headers.get("sec-websocket-protocol", "").split(",")
+        if item.strip()
+    ]
+    accepted = False
+    try:
+        async with websockets.connect(
+            NOVNC_WS_URL,
+            subprotocols=requested_protocols or None,
+            open_timeout=10,
+            close_timeout=5,
+        ) as upstream:
+            await websocket.accept(subprotocol=upstream.subprotocol)
+            accepted = True
+
+            async def client_to_upstream():
+                while True:
+                    message = await websocket.receive()
+                    if message["type"] == "websocket.disconnect":
+                        return
+                    if message.get("bytes") is not None:
+                        await upstream.send(message["bytes"])
+                    elif message.get("text") is not None:
+                        await upstream.send(message["text"])
+
+            async def upstream_to_client():
+                async for message in upstream:
+                    if isinstance(message, bytes):
+                        await websocket.send_bytes(message)
+                    else:
+                        await websocket.send_text(message)
+
+            await _run_ws_relays(client_to_upstream(), upstream_to_client())
+    except (ConnectionClosed, WebSocketDisconnect):
+        pass
+    except Exception:
+        if not accepted:
+            await websocket.close(code=1011)

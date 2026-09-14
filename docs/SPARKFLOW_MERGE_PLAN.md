@@ -3,6 +3,8 @@
 > 日期：2026-09-14
 > 范围：halfwaystudent/douyin-sparkflow（本地副本 `douyin-sparkflow/`，commit 7c7d9c2，已加入 .gitignore）与本仓库（douyin-archive v2）的对比与融合规划。
 > 结论先行：**两项目功能互补、技术栈几乎零交集。推荐"方案 A 并行双栈"起步（1–2 天可用），中期按使用频率决定是否演进到"方案 B 深度整合"（spark 引擎侧车化 + React 统一页面）。**
+>
+> **【状态更新 2026-09-14】方案 B 已直接落地实施完毕**（dev-huohua 分支）：spark-engine 无状态引擎化（M1）→ Go 接入层 `/api/spark/*`（M2）→ React `/spark` 五 Tab（M3）→ Docker 部署与文档（M4）。执行明细见 `HUOHUA_EXECUTION_PLAN.md` §12；残留项：真实账号冒烟（T1.7）、Docker 构建实测。
 
 ---
 

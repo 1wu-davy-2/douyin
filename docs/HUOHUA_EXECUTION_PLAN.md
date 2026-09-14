@@ -643,9 +643,30 @@ python main.py --port 18788 --token devtoken
   - 结果状态只有 strong/failed 两态（上游语义：weak 不会落盘，确认失败即入 failure_queue）；Go/前端按两态处理，"weak"徽标可删
   - `/login/export` 身份字段解析为 best-effort（候选键名匹配），**T1.7 真实登录时需核对原始返回并收紧**
 - 待办（不扩 scope，仅记录）：
-  - noVNC WebSocket 反代（远程滑块干预）
   - Cookie 定期自动重导出（调度器空闲时段触发）
   - `docs/HUOHUA_EXECUTION_PLAN.md` §4 契约表补 `POST /login/export` 响应字段实测结果
+
+**2026-09-14（会话 2）：M2 Go 接入层 + M3 前端 + M4 部署完成，commit e948914 / a7869df / d79f18b / (M4)**
+
+- [x] T2.1 迁移 0006_spark（accounts/friends/records/settings 四表 + send_config 初始行）+ 5 个 spark SSE 事件 + DY_SPARK_URL/TOKEN 配置 + settings.Store.WriteCookieFile 导出
+- [x] T2.2-T2.6 internal/spark 全量（client/sendconfig/store/service/scheduler）+ /api/spark/* 14 路由 + 登录反代 + main 装配；`go test ./...` 17 包全绿（含 spark 8 测试 + api 契约 4 测试）
+- [x] T3.1 api 层（spark-types.ts / spark.ts / queries.ts qk.spark* + hooks / useEvents 5 监听 / lib/spark-log-store.ts）
+- [x] T3.2-T3.6 pages/spark/ 七组件（五 Tab + login-dialog + shared）+ App 路由 + 导航「火花」(Flame)
+- [x] T3.7 `npm run build` 零错误（node_modules 需先 `npm install`，本会话已装）
+- [x] T4.1 spark-engine/Dockerfile + docker/entrypoint.sh + .dockerignore
+- [x] T4.2 docker-compose.yml spark profile（spark-state 卷）+ .env.example
+- [x] T4.3 README（功能/架构/配置/目录）+ docs/api.md（spark 章节 + 5 个 SSE 事件）
+- [x] T4.4 Go 回归全绿；本文件与 SPARKFLOW_MERGE_PLAN.md 状态更新
+- 补做（计划外）：
+  - **noVNC 反代落地**（原 T1.5 延后项）：login_bridge.py 增 `/login/vnc/{asset}` HTTP 资产转发（→websockify 静态 noVNC，默认 127.0.0.1:8788）+ `/login/vnc/websockify` WebSocket 双向中继（平移上游 webui/app.py 实现）；引擎 http 中间件不覆盖 WS，WS 端点内自行校验 X-Engine-Token（Go 反代对 WS 升级请求同样携带该头）
+  - 前端 login-dialog 的 noVNC iframe 即用此通道（`/api/spark/login/vnc/vnc.html?...&path=api/spark/login/vnc/websockify`）
+- 契约修正（相对 §5.4 原文）：
+  - 引擎期望 `sendStrategy.messageVariants`（变体在 strategy 内）、`friendListScan` 键名 → Go SendConfig.EnginePayload() 做映射层
+  - 引擎无 shuffleTargets → Go 侧 rand.Shuffle 后下发
+- 残留待办：
+  - **T1.7 真实账号冒烟**（需用户配合：`.venv/Scripts/python -m playwright install chromium` 后扫码；核对 `/login/export` 身份字段并收紧解析）
+  - Docker 构建冒烟（本机无 docker CLI，compose YAML 未经 `docker compose config` 实测）
+  - Cookie 定期自动重导出
 
 ## 13. 参考文件速查
 
