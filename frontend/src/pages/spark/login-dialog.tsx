@@ -39,6 +39,7 @@ interface LoginDialogProps {
 export function LoginDialog({ open, onOpenChange, onCreated }: LoginDialogProps) {
   const queryClient = useQueryClient();
   const [qrTick, setQrTick] = useState(() => Date.now());
+  const [vncOpen, setVncOpen] = useState(false);
   // 每次打开会话只跑一次导出+建档
   const doneRef = useRef(false);
   // 记录本次会话是否已成功 open(失败时禁用轮询报错展示)
@@ -166,15 +167,21 @@ export function LoginDialog({ open, onOpenChange, onCreated }: LoginDialogProps)
           ) : null}
         </div>
 
-        <details className="rounded-md border border-border/70">
+        <details
+          className="rounded-md border border-border/70"
+          onToggle={(e) => setVncOpen((e.target as HTMLDetailsElement).open)}
+        >
           <summary className="cursor-pointer select-none px-3 py-2 text-xs text-muted-foreground">
-            遇到滑块验证?打开远程桌面手动处理
+            遇到滑块验证?打开远程桌面手动处理(仅 Docker 部署;本机登录会弹出本地浏览器窗口)
           </summary>
-          <iframe
-            src={sparkLoginVncUrl()}
-            title="noVNC 远程桌面"
-            className="h-80 w-full rounded-b-md border-t border-border/70 bg-black"
-          />
+          {/* 懒加载:details 折叠时浏览器也会请求 iframe,这里展开才挂载,避免引擎无 noVNC 时报 502 */}
+          {vncOpen ? (
+            <iframe
+              src={sparkLoginVncUrl()}
+              title="noVNC 远程桌面"
+              className="h-80 w-full rounded-b-md border-t border-border/70 bg-black"
+            />
+          ) : null}
         </details>
 
         <p className="text-center text-[11px] text-muted-foreground">

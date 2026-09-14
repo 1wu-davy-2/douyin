@@ -2,14 +2,13 @@
 # 许可: PolyForm Noncommercial 1.0.0 —— 仅限非商业用途。本副本为火花融合(spark-engine)平移版。
 
 import asyncio
-
-from rich.console import Console
+import logging
 
 from core.browser import get_browser
-from utils.config import normalize_unique_id, upsert_user_account
+from utils.config import normalize_unique_id
 
 
-console = Console()
+logger = logging.getLogger(__name__)
 
 READY_SELECTOR = (
     'xpath=//*[contains(@id, "garfish_app_for_douyin_creator_pc_home")]'
@@ -50,18 +49,23 @@ async def collect_login_result(page, context, timeout_ms=300000):
 
 
 async def userLogin(targets=None):
+    """上游 CLI 登录流程(融合版不使用:持久化由 Go 侧负责,登录走 login_desktop_server)。
+    仅保留作参考;依赖的 upsert_user_account 已随 usersData 持久化层裁剪,故在函数内懒导入。
+    """
+    from utils.config import upsert_user_account  # 裁剪版 config 保留该函数时才可用
+
     playwright, browser = await get_browser(GUI=True)
     try:
         context = await browser.new_context()
         page = await context.new_page()
 
         await page.goto("https://creator.douyin.com/")
-        console.print("Please scan the QR code and finish logging into Douyin Creator Center.")
+        logger.info("Please scan the QR code and finish logging into Douyin Creator Center.")
 
         login_result = await collect_login_result(page, context)
-        console.print(f"Unique ID: {login_result['unique_id']}")
-        console.print(f"Name: {login_result['username']}")
-        console.print(f"Cookies: found {len(login_result['cookies'])} cookies")
+        logger.info("Unique ID: %s", login_result['unique_id'])
+        logger.info("Name: %s", login_result['username'])
+        logger.info("Cookies: found %d cookies", len(login_result['cookies']))
 
         if targets is None:
             raw_targets = input(
@@ -75,7 +79,7 @@ async def userLogin(targets=None):
             login_result["cookies"],
             targets,
         )
-        console.print(f"[bold green]Login complete. Updated account {account['username']}.[/bold green]")
+        logger.info("Login complete. Updated account %s.", account['username'])
         return account
     finally:
         await playwright.stop()
