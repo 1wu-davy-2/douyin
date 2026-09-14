@@ -28,6 +28,27 @@ docker compose logs -f douyin
 
 镜像内置 `python3 + node`(F2 签名需要),Go 主程序按需拉起/回收侧车,空闲不占资源。
 
+## 构建加速(2026-09 优化)
+
+Dockerfile 已做三层优化,重复构建(依赖不变、只改业务代码)时主要耗时仅剩 vite build + go build 增量编译,通常 1-3 分钟:
+
+1. **BuildKit 缓存挂载**:`npm ci`(/root/.npm)、`go mod download` + `go build`(/go/pkg/mod、/root/.cache/go-build)、`pip install`(/root/.cache/pip)全部走 cache mount,层缓存失效也不必重新下载/编译
+2. **apt 国内源**:运行时阶段 apt 换清华镜像(pip/npm/go 之前已换)
+3. **vite build 超时兜底**:`timeout 900` 防进程挂起(mock.ts 的 setInterval 已 unref 修复根因),构建后校验 dist 完整性
+
+注意:
+
+- `--mount` 需要 BuildKit:Docker Engine ≥ 23 默认开启;旧版需 `DOCKER_BUILDKIT=1 docker compose up -d --build`
+- **基础镜像拉取(~1.3GB)仍走 Docker Hub**,首次构建在国内服务器可能仍是最大头。建议宿主机配置 registry mirror(编辑 `/etc/docker/daemon.json` 后 `systemctl restart docker`):
+
+```json
+{
+  "registry-mirrors": ["https://docker.m.daocloud.io", "https://mirror.ccs.tencentyun.com"]
+}
+```
+
+- 完整构建日志按步骤耗时可用 `docker compose build --progress=plain` 查看,便于定位慢在哪一步
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |

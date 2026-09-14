@@ -7,7 +7,9 @@
 FROM node:22-bookworm-slim AS frontend
 WORKDIR /fe
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci --registry=https://registry.npmmirror.com
+# BuildKit 缓存挂载:重复构建时 npm 依赖不再全量重新下载
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --registry=https://registry.npmmirror.com
 COPY frontend/ ./
 # 某些环境下 vite build 完成后进程因残留句柄不退出(产物已写完),
 # 用 timeout 兜底强杀;随后校验 dist 产物完整性,构建真失败时在此失败。
@@ -20,24 +22,33 @@ FROM golang:1.27-bookworm AS backend
 ENV GOPROXY=https://goproxy.cn,direct
 WORKDIR /src
 COPY backend/go.mod backend/go.sum ./
-RUN mkdir -p internal/api/dist \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    mkdir -p internal/api/dist \
  && printf '<!doctype html><html><body>placeholder</body></html>' > internal/api/dist/index.html \
  && go mod download
 COPY backend/ ./
 COPY --from=frontend /fe/dist ./internal/api/dist/
-RUN CGO_ENABLED=0 go build -o /out/douyin-server ./cmd/server \
+# 模块缓存 + 编译缓存挂载:依赖不变时 go build 秒级(否则 modernc sqlite 全量重编)
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -o /out/douyin-server ./cmd/server \
  && CGO_ENABLED=0 go build -o /out/import-legacy ./cmd/import-legacy
 
 # ---- 阶段 3:运行时(python3 + node:Go 程序按需拉起侧车执行 F2 签名)----
 # node 二进制直接取自前端构建阶段(官方 node 镜像),不再引入 nodesource apt 源。
 FROM python:3.12-slim-bookworm
 COPY --from=frontend /usr/local/bin/node /usr/local/bin/node
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
- && rm -rf /var/lib/apt/lists/*
-# F2 依赖预装到系统 python(容器内直接用 python3,无需 venv);清华 pip 镜像
+# apt 换清华源(bookworm 为 deb822 格式的 debian.sources;兼容旧 sources.list)
+RUN set -eux; \
+    sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+    sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list 2>/dev/null || true; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates; \
+    rm -rf /var/lib/apt/lists/*
+# F2 依赖预装到系统 python(容器内直接用 python3,无需 venv);清华 pip 镜像 + BuildKit 缓存
 COPY sidecar/requirements.txt /opt/sidecar/requirements.txt
-RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r /opt/sidecar/requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r /opt/sidecar/requirements.txt
 
 WORKDIR /app
 COPY --from=backend /out/douyin-server ./douyin-server
