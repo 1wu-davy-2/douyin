@@ -58,7 +58,7 @@ def create_app() -> FastAPI:
     try:
         from engine import login_bridge  # noqa: E402  (T1.5: login desktop)
 
-        login_bridge.mount(app)
+        app.include_router(login_bridge.router)
     except ImportError:  # pragma: no cover - 登录桌面未就绪时不阻塞 /health
         pass
 

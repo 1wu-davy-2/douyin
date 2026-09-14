@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from core.browser import get_persistent_browser_context
 from core.friends import CHAT_PAGE_URL, collect_friend_names
-from core.send_tools import normalize_target_name
+from core.send_tools import _normalize_target_name as normalize_target_name
 from engine.runtime import runtime
 
 
