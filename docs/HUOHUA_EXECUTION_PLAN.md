@@ -699,6 +699,16 @@ python main.py --port 18788 --token devtoken
 
 新增 `spark-engine/spike/cookie_diag.py`（读指定 profile 的 douyin cookie 数，排查用）。
 
+**2026-09-15（会话 5）：首次真实发送暴露 3 个问题并修复，commit 5a21d70**
+
+用户手动触发发送（target=zabbix）实测：
+
+1. **SSE 事件字段全 undefined（前端契约写错）**：Go 侧按 §6.6 契约发 `account_id/status/detail`、`strong/weak/failed`、`count`；前端 `useEvents.ts` 却读 `unique_id/last_error/run_mode/total/new`（Go 从未发过这些字段）。修：前端按契约读取；新增 `accountLabel(account_id)` 用 `qk.sparkAccounts` 缓存映射昵称，日志才能显示账号名而非 `#id`。
+2. **login_required 瞬态误判（核心阻塞）**：`ensure_not_login_required`（send_tools.py）在 `goto(domcontentloaded)` + `sleep(3)` 后检测 body 是否含"扫码登录"等词；creator SPA 启动时先渲染登录容器、拿到 cookie 鉴权结果后才切已登录视图 → 3s 窗口内命中转瞬文案 → 整批被打成 login_required。实测账号 profile 登录态完好（58 条 cookie、sessionid 未过期、私信页无登录墙且正常列出会话）。修：命中后 `wait_for_load_state("networkidle")` + sleep(2) 复检，仍命中才判定。新增 `spike/probe_login_gate.py` 实测通过。
+3. **friend_not_found 误导性分类**：`send_loop.py` 兜底分支把"既无成功也无失败记录"的目标标成 `friend_not_found · target not reached in friend list`；实际是流程被 login_required 中断、目标未被处理（该好友在私信列表中确实存在）。修：存在 `account_failure` 时以它的 category/reason 作为兜底归因。
+
+新增诊断脚本：`spike/probe_chat.py`（账号 profile 对私信页的登录态）、`spike/probe_login_gate.py`（复刻发送时序验证登录墙检测）。
+
 ## 13. 参考文件速查
 
 | 要看什么 | 路径 |
