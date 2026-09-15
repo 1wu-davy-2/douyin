@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"douyin/backend/internal/config"
+	"douyin/backend/internal/risk"
 	"douyin/backend/internal/sidecar"
 )
 
@@ -32,11 +33,18 @@ type Resolver struct {
 	cfg  config.Settings
 	mgr  *sidecar.Manager
 	mode ModeSource
+	risk *risk.Tracker
 }
 
 // NewResolver wires the resolver together.
 func NewResolver(cfg config.Settings, mgr *sidecar.Manager, mode ModeSource) *Resolver {
 	return &Resolver{cfg: cfg, mgr: mgr, mode: mode}
+}
+
+// SetRiskTracker attaches the shared risk tracker; every SidecarProvider the
+// resolver hands out gets a reference.
+func (r *Resolver) SetRiskTracker(t *risk.Tracker) {
+	r.risk = t
 }
 
 // IsMock reports whether the effective provider is the offline mock.
@@ -58,5 +66,7 @@ func (r *Resolver) Resolve(ctx context.Context) Provider {
 	if r.IsMock(ctx) {
 		return NewMockProvider()
 	}
-	return NewSidecarProvider(r.mgr)
+	p := NewSidecarProvider(r.mgr)
+	p.SetRiskTracker(r.risk)
+	return p
 }

@@ -129,10 +129,20 @@ export function useEvents(enabled: boolean): void {
           sidecar: Health["sidecar"];
           risk_paused: boolean;
           paused_until: string | null;
+          cookie_blocked?: boolean;
+          blocked_reason?: string | null;
         };
-        client.setQueryData<Health>(qk.health, (prev) =>
-          prev ? { ...prev, sidecar: data.sidecar } : prev,
-        );
+        client.setQueryData<Health>(qk.health, (prev) => {
+          if (!prev) return prev;
+          const next = { ...prev, sidecar: data.sidecar || prev.sidecar };
+          // 风控字段由 risk tracker 事件携带;缺省保持原值
+          if (data.cookie_blocked !== undefined) {
+            next.cookie_blocked = data.cookie_blocked;
+            next.blocked_reason = data.blocked_reason ?? null;
+            if (data.cookie_blocked === false) next.blocked_since = null;
+          }
+          return next;
+        });
       });
     };
 

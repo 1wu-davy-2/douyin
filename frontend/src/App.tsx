@@ -13,6 +13,7 @@ import { qk, useAuthStatus } from "./api/queries";
 import { useEvents } from "./api/useEvents";
 import { Layout } from "./components/layout";
 import { PlayerDialog } from "./components/player/player-dialog";
+import { CookieAlertDialog } from "./components/cookie-alert-dialog";
 import { SetupPage } from "./pages/setup";
 import { LoginPage } from "./pages/login";
 import { LibraryPage } from "./pages/library";
@@ -58,6 +59,8 @@ function AuthGate() {
       </Routes>
       {/* 播放器由 lib/player-store 驱动,全局挂载一次 */}
       <PlayerDialog />
+      {/* 抖音风控/Cookie 失效全局弹窗(契约 v1.4) */}
+      <CookieAlertDialog />
       <EventBridge />
     </>
   );

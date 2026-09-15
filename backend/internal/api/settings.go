@@ -31,17 +31,22 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSettingsPatch PATCH /api/settings — partial update with validation.
-// On a cookie change the .cookie file is rewritten for the sidecar; provider
-// switches take effect on the next request (no process restart).
+// On a cookie change the .cookie file is rewritten for the sidecar and the
+// risk-control block state is cleared; provider switches take effect on the
+// next request (no process restart).
 func (s *Server) handleSettingsPatch(w http.ResponseWriter, r *http.Request) {
 	var patch settings.Patch
 	if !decodeJSON(w, r, &patch) {
 		return
 	}
-	if _, err := s.deps.Store.Apply(r.Context(), patch); err != nil {
+	cookieChanged, err := s.deps.Store.Apply(r.Context(), patch)
+	if err != nil {
 		// Validation failures are client errors.
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if cookieChanged && s.deps.Risk != nil {
+		s.deps.Risk.Reset()
 	}
 	view, err := s.deps.Store.View(r.Context())
 	if err != nil {

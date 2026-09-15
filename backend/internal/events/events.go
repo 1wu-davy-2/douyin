@@ -76,10 +76,14 @@ type ScanDone struct {
 }
 
 // ProviderStatus is emitted on sidecar state changes / risk-control pauses.
+// CookieBlocked/BlockedReason (contract v1.4, appended) report the douyin
+// risk-control block: the UI shows a global "refresh the cookie" prompt.
 type ProviderStatus struct {
-	Sidecar     string  `json:"sidecar"` // stopped | starting | running
-	RiskPaused  bool    `json:"risk_paused"`
-	PausedUntil *string `json:"paused_until"`
+	Sidecar       string  `json:"sidecar"` // stopped | starting | running
+	RiskPaused    bool    `json:"risk_paused"`
+	PausedUntil   *string `json:"paused_until"`
+	CookieBlocked bool    `json:"cookie_blocked"`
+	BlockedReason *string `json:"blocked_reason"`
 }
 
 // subscriberBuffer is the per-subscriber channel capacity (contract: 256).

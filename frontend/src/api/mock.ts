@@ -1169,7 +1169,7 @@ export function mockRoute(req: MockRequest): MockResponse {
   const now = Date.now();
 
   // ----- 公开端点 -----
-  if (seg[0] === "health") return ok({ status: "ok", provider: "mock", sidecar: "running", real_scan_ready: false });
+  if (seg[0] === "health") return ok({ status: "ok", provider: "mock", sidecar: "running", real_scan_ready: false, cookie_blocked: false, blocked_reason: null, blocked_since: null });
 
   if (seg[0] === "auth") {
     if (seg[1] === "status" && method === "GET") {

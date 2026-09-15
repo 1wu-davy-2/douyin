@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 
+	"douyin/backend/internal/risk"
 	"douyin/backend/internal/sidecar"
 )
 
@@ -19,6 +20,7 @@ import (
 type SidecarProvider struct {
 	endpoint sidecar.Endpoint
 	client   *http.Client // 90s: F2-internal retries can take up to ~65s
+	risk     *risk.Tracker
 }
 
 // NewSidecarProvider wraps a sidecar Endpoint (the Manager).
@@ -29,12 +31,20 @@ func NewSidecarProvider(endpoint sidecar.Endpoint) *SidecarProvider {
 	}
 }
 
+// SetRiskTracker attaches the shared risk tracker. Providers are constructed
+// per request, so the Resolver propagates its tracker to every instance.
+func (p *SidecarProvider) SetRiskTracker(t *risk.Tracker) {
+	p.risk = t
+}
+
 // get performs one sidecar GET: ensure the process is up, call with the
 // shared token, decode into out, and turn any non-200 into a rich error.
 func (p *SidecarProvider) get(ctx context.Context, path string, query url.Values, out any) error {
 	p.endpoint.Touch()
 	if err := p.endpoint.Ensure(ctx); err != nil {
-		return fmt.Errorf("sidecar %s: %w", path, err)
+		err = fmt.Errorf("sidecar %s: %w", path, err)
+		p.recordFailure(path, err)
+		return err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
@@ -46,22 +56,44 @@ func (p *SidecarProvider) get(ctx context.Context, path string, query url.Values
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("sidecar %s: %w", path, err)
+		err = fmt.Errorf("sidecar %s: %w", path, err)
+		p.recordFailure(path, err)
+		return err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return fmt.Errorf("sidecar %s: read response: %w", path, err)
+		err = fmt.Errorf("sidecar %s: read response: %w", path, err)
+		p.recordFailure(path, err)
+		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return sidecarError(path, resp.StatusCode, body)
+		err = sidecarError(path, resp.StatusCode, body)
+		p.recordFailure(path, err)
+		return err
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("sidecar %s: decode response: %w", path, err)
 	}
 	p.endpoint.Touch()
+	p.recordSuccess(path)
 	return nil
+}
+
+// recordFailure feeds the risk tracker; nil-safe.
+func (p *SidecarProvider) recordFailure(path string, err error) {
+	if p.risk != nil {
+		p.risk.RecordFailure(path, err)
+	}
+}
+
+// recordSuccess reports a healthy call. Only the data plane (/posts, /work)
+// resets risk state — /profile passes even for half-dead cookies.
+func (p *SidecarProvider) recordSuccess(path string) {
+	if p.risk != nil {
+		p.risk.RecordSuccess(path != "/profile")
+	}
 }
 
 // sidecarError extracts {"error": ...} from a failed sidecar response; if the

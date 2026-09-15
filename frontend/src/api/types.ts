@@ -52,6 +52,12 @@ export interface Health {
   provider: "mock" | "sidecar";
   sidecar: "stopped" | "starting" | "running";
   real_scan_ready: boolean;
+  /** 契约 v1.4:抖音风控/Cookie 失效已被后端探测到;为 true 时全局弹窗提示更新 Cookie。 */
+  cookie_blocked: boolean;
+  /** 契约 v1.4:风控原因说明;cookie_blocked=false 时为 null。 */
+  blocked_reason: string | null;
+  /** 契约 v1.4:风控首次触发时间(RFC3339);cookie_blocked=false 时为 null。 */
+  blocked_since: string | null;
 }
 
 // ---------- 博主与作品 ----------

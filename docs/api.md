@@ -29,7 +29,7 @@
 
 ## 健康
 
-| GET | `/api/health` | → `{status:"ok", provider:"mock"|"sidecar", sidecar:"stopped"|"starting"|"running", real_scan_ready:bool}` |
+| GET | `/api/health` | → `{status:"ok", provider:"mock"|"sidecar", sidecar:"stopped"|"starting"|"running", real_scan_ready:bool, cookie_blocked:bool, blocked_reason:string\|null, blocked_since:string\|null}`(v1.4 追加风控字段:连续探测到抖音 403 / Cookie 失效时 `cookie_blocked=true`,前端据此全局弹窗提示更新 Cookie;Cookie 变更或数据面请求成功后自动解除) |
 
 ## 博主与作品 Creators / Works
 
@@ -146,7 +146,7 @@ event: scan.done
 data: {"scan_id":5,"creator_id":1,"status":"succeeded"|"partial"|"failed","pages":26,"new_count":502,"completeness":0,"last_error":null}
 
 event: provider.status
-data: {"sidecar":"running","risk_paused":false,"paused_until":null}
+data: {"sidecar":"running","risk_paused":false,"paused_until":null,"cookie_blocked":false,"blocked_reason":null}
 ```
 
 规则:每 15s 发 `: ping` 保活;客户端重连指数退避;`download.progress` 仅对 downloading 任务、节流 1s 一条;事件总线缓冲 256,慢消费者丢弃 progress 类事件(状态类必达)。

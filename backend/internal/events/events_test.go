@@ -153,7 +153,7 @@ func TestPayloadJSONFieldNames(t *testing.T) {
 		{"scan.done", ScanDone{ScanID: 5, CreatorID: 1, Status: "succeeded", Pages: 26, NewCount: 502, Completeness: 0},
 			`{"scan_id":5,"creator_id":1,"status":"succeeded","pages":26,"new_count":502,"completeness":0,"last_error":null}`},
 		{"provider.status", ProviderStatus{Sidecar: "running"},
-			`{"sidecar":"running","risk_paused":false,"paused_until":null}`},
+			`{"sidecar":"running","risk_paused":false,"paused_until":null,"cookie_blocked":false,"blocked_reason":null}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

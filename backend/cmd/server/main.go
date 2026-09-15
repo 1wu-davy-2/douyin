@@ -29,6 +29,7 @@ import (
 	"douyin/backend/internal/events"
 	"douyin/backend/internal/legacy"
 	"douyin/backend/internal/provider"
+	"douyin/backend/internal/risk"
 	"douyin/backend/internal/scanner"
 	"douyin/backend/internal/scheduler"
 	"douyin/backend/internal/settings"
@@ -126,6 +127,11 @@ func run(ctx context.Context, cfg config.Settings) error {
 	resolver := provider.NewResolver(cfg, mgr, store)
 	authService := auth.New(database)
 
+	// Risk-control tracker (contract v1.4): consecutive douyin 403 / dead
+	// cookie failures flip it to blocked; the UI prompts for a cookie refresh.
+	riskTracker := risk.New(bus, mgr.Status)
+	resolver.SetRiskTracker(riskTracker)
+
 	// Scanner (stage 4): owns scan runs, single-flight, SSE progress events.
 	scanSvc := scanner.New(ctx, resolver, database, bus, store)
 	if err := scanSvc.RecycleStaleRuns(); err != nil {
@@ -177,6 +183,7 @@ func run(ctx context.Context, cfg config.Settings) error {
 			DB:         database,
 			Scanner:    scanSvc,
 			Downloader: dl,
+			Risk:       riskTracker,
 			Uploader:   up,
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
