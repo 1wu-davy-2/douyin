@@ -668,6 +668,25 @@ python main.py --port 18788 --token devtoken
   - Docker 构建冒烟（本机无 docker CLI，compose YAML 未经 `docker compose config` 实测）
   - Cookie 定期自动重导出
 
+**2026-09-15（会话 3）：分支系统审查 + login/export 顺序 P0 修复，commit cd1c76f**
+
+- 触发：09-14 连续踩 4 个线上 bug（503 装配遗漏 / nil 崩溃 / 502 / 二维码空白），决定对照本计划全量审查 dev-huohua。
+- 验收复跑：`go vet ./...` 零告警；`go test ./...` 17 包全绿；引擎 login_bridge 语法+导入冒烟通过；端到端 `/api/spark/overview` 200（Go→引擎 health ok）。
+- 发现并修复（commit cd1c76f）：
+  - **P0 顺序 bug**：`/login/export` 先调 LD `/close`（会 rmtree login-profile）再 `copytree(login-profile → uid-xxx)`。本机靠沙箱 safe-delete 守卫歪打正着（rmtree 被拦、目录还在）；Docker 正常环境 close 会真删目录 → copytree 必 502 "login profile dir missing"，登录导出在容器里必失败。修复：copytree 提到 close 之前。
+  - **P2 cosmetic**：`/login/*` 错误体双重包装（engine 把 LD 的 `{"detail":"..."}` JSON 当字符串塞进自己的 detail 字段）。新增 `_ld_error_detail()` 解出内层文案。
+- 审查通过项（无问题）：
+  - main.go 装配完整（Spark 接线、tzdata import、调度器启停、sparkWG.Wait）。
+  - nil 切片防御：store 三处 `make([]T,0)` + Overview 防 nil；selectTargets 的 nil out 有 `len==0` 兜底不外泄到引擎。
+  - 前端空态：五 Tab 对可能 undefined 的数组均有 `?? []`/pending/error 兜底（OverviewTab 51 行 `!data` 兜底后再解构）。
+  - 调度核心：inSendWindow 含 intervalMinutes 宽限；scheduledTimeFor sha256 散布与上游一致；strong sticky 不被失败降级；beginSend 锁内原子检查+设置。
+  - 部署：compose spark profile / spark-state 卷 / DY_SPARK_TOKEN 必填校验 / DY_BIND=0.0.0.0 全符合 §8。
+  - 合规：spark-engine 平移文件全带来源+PolyForm 注释；.gitignore 排除 data/、.cookie、spark-engine/state/、douyin-sparkflow/。
+- 设计观察（记录不修）：
+  - 引擎 4 处 `runtime.lock.locked()` check-then-act 竞态（/send/run、/friends/refresh、/cookies/export、/login/export）：并发请求可能从 409 退化为排队等待，但互斥仍成立。Go 侧 TriggerSend 用原子 beginSend 无此问题。
+  - runManualSend 用 `context.Background()` 不响应关停：手动 send 不阻塞 graceful shutdown，进程退出时强制中断。设计取舍可接受。
+- 仍未做（计划既定遗留，非本次审查新发现）：T1.7 真实扫码冒烟 / Docker 构建冒烟 / Cookie 自动重导出。
+
 ## 13. 参考文件速查
 
 | 要看什么 | 路径 |
