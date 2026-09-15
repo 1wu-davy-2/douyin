@@ -286,6 +286,17 @@ async def _page_has_login_required_prompt(page):
 async def ensure_not_login_required(page, account_name, stage):
     is_required, detail = await _page_has_login_required_prompt(page)
     if is_required:
+        # 改造说明(火花融合): creator SPA 启动时会先渲染登录容器、拿到 cookie
+        # 鉴权结果后才切到已登录视图;而调用方 goto 后立即检测(domcontentloaded),
+        # 容易命中"扫码登录"等转瞬文案 → 整批被误判 login_required。
+        # 命中后等页面稳定再复检一次,仍命中才判定(实测误判率明显下降)。
+        try:
+            await page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+        is_required, detail = await _page_has_login_required_prompt(page)
+    if is_required:
         raise RuntimeError(f"login_required at {stage} for {account_name}: {detail}")
 
 

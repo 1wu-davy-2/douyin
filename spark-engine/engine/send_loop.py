@@ -94,13 +94,22 @@ async def run_send(
                 }
             )
             continue
+        # 流程被账号级错误中断时,未处理的目标应归因于该错误;否则整批会被
+        # 误报成 "friend_not_found"(实测 login_required 中断后 target 无任何
+        # 记录 → 兜底成好友不存在,严重误导排查)。
+        fallback_category = "friend_not_found"
+        fallback_detail = "target not reached in friend list"
+        account_failure = dict(user.get("account_failure") or {})
+        if account_failure:
+            fallback_category = str(account_failure.get("category") or "account_error")
+            fallback_detail = str(account_failure.get("reason") or fallback_detail)
         results.append(
             {
                 "target": target,
                 "message": "",
                 "state": "failed",
-                "category": "friend_not_found",
-                "detail": "target not reached in friend list",
+                "category": fallback_category,
+                "detail": fallback_detail,
             }
         )
 
