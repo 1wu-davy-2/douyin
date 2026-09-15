@@ -16,13 +16,17 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-from utils.config import DEBUG, Environment, get_environment
+from utils.config import DEBUG, Environment, get_environment, profile_root as config_profile_root
 
 
 logger = logging.getLogger(__name__)
 
 PLAYWRIGHT_BROWSERS_PATH = "../chrome"
-DEFAULT_PROFILE_ROOT = "/opt/douyin-sparkflow/state/browser-profiles"
+# 改造说明(火花融合): 上游 DEFAULT_PROFILE_ROOT 是 Docker 绝对路径
+# "/opt/douyin-sparkflow/state/browser-profiles"。融合版统一走 utils.config.profile_root()
+# (repo_root()/state/browser-profiles,env SPARKFLOW_BROWSER_PROFILE_ROOT 优先)——
+# 否则未设 env 时 core 与 config/login_bridge 两套默认值分叉成两个 profile 根,
+# 表现为 export 复制到 A 目录、profile_context 去 B 目录读 → cookie_count=0。
 
 
 def configure_playwright_environment():
@@ -131,9 +135,11 @@ def browser_profile_root(root=None):
     configured = (
         root
         or os.getenv("SPARKFLOW_BROWSER_PROFILE_ROOT")
-        or DEFAULT_PROFILE_ROOT
     )
-    return Path(configured)
+    if configured:
+        return Path(configured)
+    # 未设 env/参数 → 与 login_bridge 的复制目标保持同一默认(单一事实来源)。
+    return config_profile_root()
 
 
 async def get_browser(GUI=False, network_mode=None):

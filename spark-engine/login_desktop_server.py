@@ -465,13 +465,14 @@ class LoginDesktopManager:
 
         if page:
             current_url = page.url
-            # 改造说明(火花融合): 登录判定以 URL 为准——/creator-micro/ 是登录后
-            # 才会进入的 SPA 路由(与 _refresh_login_qr_locked 的判定一致)。旧逻辑
-            # 只依赖 collect_login_result 的绝对路径 xpath 抓身份,抖音页面改版即
-            # 失配 → 1s 超时 → logged_in 恒 False,扫码成功后前端永远卡在二维码
-            # 轮询。身份字段降级为 best-effort:解析失败留空,由 /login/export 的
-            # www fallback(uid cookie)兜底。
-            if "/creator-micro/" in current_url:
+            # 改造说明(火花融合): 登录判定以 URL 为准——/creator-micro/ 与
+            # www 个人页 /user/self 都是登录后才会进入的路由(export 的 www
+            # fallback 会把页面导航到后者,故两者都接受)。旧逻辑只依赖
+            # collect_login_result 的绝对路径 xpath 抓身份,抖音页面改版即
+            # 失配 → 1s 超时 → logged_in 恒 False,扫码成功后前端永远卡在
+            # 二维码轮询。身份字段降级为 best-effort:解析失败留空,由
+            # /login/export 的 www fallback(uid cookie)兜底。
+            if "/creator-micro/" in current_url or "/user/self" in current_url:
                 logged_in = True
                 if not self._page_operation_lock.locked():
                     try:
@@ -741,8 +742,11 @@ async def reset():
 
 
 @app.post("/close")
-async def close():
-    await manager.stop(clear_profile=True)
+async def close(clear_profile: bool = True):
+    # 改造说明(火花融合): clear_profile 可选。引擎 /login/export 需要
+    # "只关浏览器、保留 login-profile" 的语义(浏览器运行时 Cookies SQLite 被
+    # 独占锁,必须先关再复制;而默认 clear_profile=True 会 rmtree 掉复制源)。
+    await manager.stop(clear_profile=clear_profile)
     return {"ok": True}
 
 

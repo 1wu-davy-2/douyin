@@ -5,10 +5,11 @@
   监听 127.0.0.1:18090，env LOGIN_PROFILE_DIR 指定登录 profile 目录）持有登录浏览器；
   本模块把引擎的 /login/* 请求转发给它。
 - 导出流程（POST /login/export）：
-    1. 转发 POST {LD}/export 取登录身份（best-effort 解析 unique_id/nickname）
-    2. 把登录 profile 目录整体复制为账号 profile（uid-{unique_id}）
-       —— 必须在 /close 之前：LD 的 close 会 rmtree login-profile
-    3. 转发 POST {LD}/close 关闭登录浏览器（释放 profile 文件句柄、清理登录 profile）
+    1. 转发 POST {LD}/export 取登录身份 + cookie 列表（best-effort 解析 unique_id/nickname）
+    2. 转发 POST {LD}/close?clear_profile=false 关浏览器（先释放 Cookies 等文件锁；
+       不能清 login-profile，它是下一步的复制源）
+    3. 播种账号 profile：复制 login-profile（附属状态）+ 显式注入 LD 导出的 cookie
+       （主路径——只复制在 Windows 上会因 DPAPI 加密 key 不一致丢 cookie）
     4. 从账号 profile 读 Cookie → 拼成 Cookie 头字符串返回
       （Go 收到后写 data/.cookie，帧藏 F2 侧车热加载 → 归档复用登录态）
 - noVNC 远程桌面反代（/login/vnc/*，平移上游 webui/app.py 的 login-desktop/proxy 段）：
@@ -19,6 +20,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 import time
@@ -38,6 +40,8 @@ from engine.endpoints_browser import _extract_douyin_cookie_header, profile_cont
 from engine.runtime import runtime
 from utils.config import profile_root
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -184,28 +188,45 @@ async def login_export():
                     detail=f"identity parse failed; raw keys={sorted(result.keys()) if isinstance(result, dict) else type(result).__name__}",
                 )
 
-            # 先把登录 profile 播种为账号 profile：必须在 /close 之前！
-            # LD 的 /close 会 rmtree login-profile（正常环境目录即被清空，
-            # 此前先 close 后 copy 的顺序在 Docker 里必然 502）。
-            # 浏览器仍在运行：锁文件（LOCK*/Singleton*）忽略后其余可读。
-            src = LOGIN_PROFILE_DIR
-            if not src.exists():
-                raise HTTPException(status_code=502, detail=f"login profile dir missing: {src}")
-            profile_name = f"uid-{unique_id}"
-            dst = Path(profile_root()) / profile_name
-            dst.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(src, dst, dirs_exist_ok=True,
-                            ignore=shutil.ignore_patterns("LOCK*", "*.tmp", "Singleton*"))
-
-            # 复制完成后再关闭登录浏览器并清理登录 profile。
+            # 先"只关浏览器、不清 profile"释放 Cookies SQLite 等文件锁:
+            # 浏览器运行时复制 profile 必踩 WinError 32(Cookies 被独占),
+            # 而默认 close 会 rmtree 掉复制源——clear_profile=false 同时绕开两者。
             try:
-                _ld_request("POST", "/close", timeout=30)
+                _ld_request("POST", "/close?clear_profile=false", timeout=30)
             except HTTPException:
                 pass
             await asyncio.sleep(2)
 
-            # 从账号 profile 读 Cookie（无需访问页面，profile 已带登录态）。
+            # 播种账号 profile:
+            # 1) 复制 login-profile —— 保留 origin/storage/preferences 等附属状态;
+            # 2) 显式注入 LD 导出的 cookie —— 主路径。
+            #    只靠复制不可靠:Windows 下 Chromium 的 cookie value 用 DPAPI 加密,
+            #    加密 key 在 Local State;复制后 key/状态不一致时 Chromium 会静默
+            #    丢弃全部 cookie(SQLite 里行还在,但 context.cookies() 读回 0 条)。
+            #    这正是 T1.5 "复制方案" 的实测缺陷,回归上游的 cookie seed 思路。
+            profile_name = f"uid-{unique_id}"
+            dst = Path(profile_root()) / profile_name
+            dst.mkdir(parents=True, exist_ok=True)
+
+            src = LOGIN_PROFILE_DIR
+            if src.exists():
+                try:
+                    shutil.copytree(src, dst, dirs_exist_ok=True,
+                                    ignore=shutil.ignore_patterns("LOCK*", "*.tmp", "Singleton*"))
+                except Exception as exc:  # 复制失败不致命:cookie 注入是登录态主来源
+                    logger.warning("login profile copy failed (ignored): %s", exc)
+
+            ld_cookies = []
+            if isinstance(result, dict) and isinstance(result.get("cookies"), list):
+                ld_cookies = [c for c in result["cookies"]
+                              if isinstance(c, dict) and c.get("name") and c.get("domain")]
+
             async with profile_context(profile_name) as context:
+                if ld_cookies:
+                    try:
+                        await context.add_cookies(ld_cookies)
+                    except Exception as exc:  # 个别 cookie 字段不合规时不让整体失败
+                        logger.warning("seed cookies partially failed: %s", exc)
                 cookies = await context.cookies()
             cookie_header = _extract_douyin_cookie_header(cookies)
 
