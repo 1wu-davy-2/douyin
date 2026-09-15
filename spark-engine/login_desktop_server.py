@@ -465,14 +465,21 @@ class LoginDesktopManager:
 
         if page:
             current_url = page.url
-            if not self._page_operation_lock.locked():
-                try:
-                    result = await collect_login_result(page, self.context, timeout_ms=1000)
-                    logged_in = True
-                    username = result["username"]
-                    unique_id = result["unique_id"]
-                except Exception:
-                    pass
+            # 改造说明(火花融合): 登录判定以 URL 为准——/creator-micro/ 是登录后
+            # 才会进入的 SPA 路由(与 _refresh_login_qr_locked 的判定一致)。旧逻辑
+            # 只依赖 collect_login_result 的绝对路径 xpath 抓身份,抖音页面改版即
+            # 失配 → 1s 超时 → logged_in 恒 False,扫码成功后前端永远卡在二维码
+            # 轮询。身份字段降级为 best-effort:解析失败留空,由 /login/export 的
+            # www fallback(uid cookie)兜底。
+            if "/creator-micro/" in current_url:
+                logged_in = True
+                if not self._page_operation_lock.locked():
+                    try:
+                        result = await collect_login_result(page, self.context, timeout_ms=1000)
+                        username = result["username"]
+                        unique_id = result["unique_id"]
+                    except Exception:
+                        pass
 
         payload = {
             "running": True,
