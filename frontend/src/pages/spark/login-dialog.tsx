@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import { ApiError } from "../../api/client";
 import {
   closeSparkLogin,
   createSparkAccount,
@@ -15,11 +16,13 @@ import {
   exportSparkLogin,
   fetchSparkLoginQr,
   getSparkLoginStatus,
+  listSparkAccounts,
   openSparkLogin,
   refreshSparkFriends,
   refreshSparkQr,
   sparkLoginVncUrl,
 } from "../../api/spark";
+import type { SparkAccount } from "../../api/spark-types";
 import { Button } from "../../components/ui/button";
 import {
   Dialog,
@@ -103,13 +106,31 @@ export function LoginDialog({ open, onOpenChange, onCreated }: LoginDialogProps)
     (async () => {
       try {
         const identity = await exportSparkLogin();
-        const account = await createSparkAccount({
-          unique_id: identity.unique_id,
-          username: identity.unique_id,
-          nickname: identity.nickname,
-          profile_name: identity.profile_name,
-        });
-        toast.success("账号已添加", { description: `${identity.nickname}(@${identity.unique_id})` });
+        let account: SparkAccount;
+        try {
+          account = await createSparkAccount({
+            unique_id: identity.unique_id,
+            username: identity.unique_id,
+            nickname: identity.nickname,
+            profile_name: identity.profile_name,
+          });
+          toast.success("账号已添加", {
+            description: `${identity.nickname}(@${identity.unique_id})`,
+          });
+        } catch (e) {
+          // 409 = 该 unique_id 已建档。重新扫码多半是为了恢复失效的登录态
+          // (风控踢下线 / session 过期),此时应复用已有账号——引擎侧已把新
+          // cookie 写回同名 profile,后续刷好友+导 Cookie 即可完成恢复。
+          if (!(e instanceof ApiError && e.status === 409)) throw e;
+          const existing = (await listSparkAccounts()).find(
+            (a) => a.unique_id === identity.unique_id,
+          );
+          if (!existing) throw e;
+          account = existing;
+          toast.info("账号已存在,已刷新登录态", {
+            description: `${identity.nickname}(@${identity.unique_id})`,
+          });
+        }
         // 好友刷新与 Cookie 导出后台执行,不阻塞关闭
         void refreshSparkFriends(account.id).catch(() =>
           toast.warning("好友列表刷新失败", { description: "可稍后在账号页手动刷新" }),

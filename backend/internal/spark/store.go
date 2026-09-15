@@ -132,6 +132,18 @@ func (s *Store) CreateAccount(uniqueID, username, nickname, profileName string) 
 	return s.GetAccount(id)
 }
 
+// CountFriends returns how many friend rows the account currently has. It is
+// used as the baseline for the anomaly guard in RefreshFriends.
+func (s *Store) CountFriends(accountID int64) (int, error) {
+	var n int
+	if err := s.handle.
+		QueryRow(`SELECT COUNT(1) FROM spark_friends WHERE account_id = ?`, accountID).
+		Scan(&n); err != nil {
+		return 0, fmt.Errorf("spark: count friends: %w", err)
+	}
+	return n, nil
+}
+
 // GetAccount fetches one account by id (ErrNotFound when missing).
 func (s *Store) GetAccount(id int64) (Account, error) {
 	row := s.handle.QueryRow(

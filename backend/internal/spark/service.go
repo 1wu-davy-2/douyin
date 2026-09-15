@@ -179,6 +179,13 @@ func inSendWindow(cfg SendConfig, now time.Time) bool {
 
 // ------------------------------------------------------------------ friends --
 
+// Friend-list anomaly guard (see RefreshFriends): refuse a whole-table
+// replacement when the engine reports far more friends than we already have.
+const (
+	friendAnomalyMinTotal = 200
+	friendAnomalyRatio    = 3
+)
+
 // RefreshFriends pulls the friend list from the engine and swaps it into
 // SQLite (selected flags preserved, new friends unselected).
 func (s *Service) RefreshFriends(ctx context.Context, accountID int64) (total, newCount int, err error) {
@@ -189,6 +196,17 @@ func (s *Service) RefreshFriends(ctx context.Context, accountID int64) (total, n
 	resp, err := s.client.RefreshFriends(ctx, acct.ProfileName)
 	if err != nil {
 		return 0, 0, err
+	}
+	// 异常保护:整表替换前校验数量。实测一次刷新抓到 697 人(原本 17 人),
+	// 疑似滚动时抓到了"陌生人私信/全部"列表。直接替换会污染好友表,用户一
+	// 旦全选就有误发给陌生人的风险——暴增时拒绝替换,保留原好友表。
+	if prev, err := s.store.CountFriends(acct.ID); err == nil && prev > 0 {
+		if len(resp.Friends) > friendAnomalyMinTotal && len(resp.Friends) > prev*friendAnomalyRatio {
+			return 0, 0, fmt.Errorf(
+				"spark: friend count %d looks wrong (was %d, >%dx growth); refusing to replace friend list",
+				len(resp.Friends), prev, friendAnomalyRatio,
+			)
+		}
 	}
 	total, newCount, err = s.store.ReplaceFriends(acct.ID, resp.Friends)
 	if err != nil {
