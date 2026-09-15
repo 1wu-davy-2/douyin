@@ -6,8 +6,9 @@
   本模块把引擎的 /login/* 请求转发给它。
 - 导出流程（POST /login/export）：
     1. 转发 POST {LD}/export 取登录身份（best-effort 解析 unique_id/nickname）
-    2. 转发 POST {LD}/close 关闭登录浏览器（释放 profile 文件句柄）
-    3. 把登录 profile 目录整体复制为账号 profile（uid-{unique_id}）
+    2. 把登录 profile 目录整体复制为账号 profile（uid-{unique_id}）
+       —— 必须在 /close 之前：LD 的 close 会 rmtree login-profile
+    3. 转发 POST {LD}/close 关闭登录浏览器（释放 profile 文件句柄、清理登录 profile）
     4. 从账号 profile 读 Cookie → 拼成 Cookie 头字符串返回
       （Go 收到后写 data/.cookie，帧藏 F2 侧车热加载 → 归档复用登录态）
 - noVNC 远程桌面反代（/login/vnc/*，平移上游 webui/app.py 的 login-desktop/proxy 段）：
@@ -97,6 +98,17 @@ def _find_first(result: dict, keys: tuple[str, ...]) -> str:
     return walk(result or {})
 
 
+def _ld_error_detail(resp) -> str:
+    """解出 LD 错误体内层文案，避免 {"detail":"{\\"detail\\":...}"} 双重包装。"""
+    try:
+        data = resp.json()
+        if isinstance(data, dict) and data.get("detail"):
+            return str(data["detail"])
+    except ValueError:
+        pass
+    return resp.text or f"login desktop error {resp.status_code}"
+
+
 @router.get("/login/health")
 async def login_health():
     resp = _ld_request("GET", "/health", timeout=5)
@@ -107,7 +119,7 @@ async def login_health():
 async def login_open():
     resp = _ld_request("POST", "/open-login", timeout=60)
     if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        raise HTTPException(status_code=resp.status_code, detail=_ld_error_detail(resp))
     return {"status": "opened", "upstream": resp.json() if resp.content else {}}
 
 
@@ -117,14 +129,14 @@ async def login_qr():
     if resp.status_code == 200:
         return Response(content=resp.content, media_type="image/png",
                         headers={"Cache-Control": "no-store, max-age=0"})
-    raise HTTPException(status_code=resp.status_code, detail=resp.text or "QR not ready")
+    raise HTTPException(status_code=resp.status_code, detail=_ld_error_detail(resp) or "QR not ready")
 
 
 @router.post("/login/refresh-qr")
 async def login_refresh_qr():
     resp = _ld_request("POST", "/refresh-qr", timeout=30)
     if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        raise HTTPException(status_code=resp.status_code, detail=_ld_error_detail(resp))
     return {"status": "refreshed"}
 
 
@@ -132,7 +144,7 @@ async def login_refresh_qr():
 async def login_status():
     resp = _ld_request("GET", "/status", timeout=10)
     if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        raise HTTPException(status_code=resp.status_code, detail=_ld_error_detail(resp))
     try:
         return resp.json()
     except ValueError:
@@ -143,7 +155,7 @@ async def login_status():
 async def login_close():
     resp = _ld_request("POST", "/close", timeout=30)
     if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        raise HTTPException(status_code=resp.status_code, detail=_ld_error_detail(resp))
     return {"status": "closed"}
 
 
@@ -157,7 +169,7 @@ async def login_export():
         try:
             resp = _ld_request("POST", "/export", timeout=120)
             if resp.status_code >= 400:
-                raise HTTPException(status_code=resp.status_code, detail=resp.text)
+                raise HTTPException(status_code=resp.status_code, detail=_ld_error_detail(resp))
             try:
                 payload = resp.json()
             except ValueError:
@@ -172,13 +184,10 @@ async def login_export():
                     detail=f"identity parse failed; raw keys={sorted(result.keys()) if isinstance(result, dict) else type(result).__name__}",
                 )
 
-            # 关闭登录浏览器，释放 login-profile 目录句柄。
-            try:
-                _ld_request("POST", "/close", timeout=30)
-            except HTTPException:
-                pass
-            await asyncio.sleep(2)
-
+            # 先把登录 profile 播种为账号 profile：必须在 /close 之前！
+            # LD 的 /close 会 rmtree login-profile（正常环境目录即被清空，
+            # 此前先 close 后 copy 的顺序在 Docker 里必然 502）。
+            # 浏览器仍在运行：锁文件（LOCK*/Singleton*）忽略后其余可读。
             src = LOGIN_PROFILE_DIR
             if not src.exists():
                 raise HTTPException(status_code=502, detail=f"login profile dir missing: {src}")
@@ -187,6 +196,13 @@ async def login_export():
             dst.mkdir(parents=True, exist_ok=True)
             shutil.copytree(src, dst, dirs_exist_ok=True,
                             ignore=shutil.ignore_patterns("LOCK*", "*.tmp", "Singleton*"))
+
+            # 复制完成后再关闭登录浏览器并清理登录 profile。
+            try:
+                _ld_request("POST", "/close", timeout=30)
+            except HTTPException:
+                pass
+            await asyncio.sleep(2)
 
             # 从账号 profile 读 Cookie（无需访问页面，profile 已带登录态）。
             async with profile_context(profile_name) as context:
