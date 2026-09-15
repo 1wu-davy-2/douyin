@@ -633,7 +633,7 @@ python main.py --port 18788 --token devtoken
 - [x] T1.4 /cookies/export + /friends/refresh（冒烟通过）
 - [x] T1.5 登录桥接（login_bridge.py 转发 login_desktop_server:18090；export=身份解析→复制 login-profile→读 Cookie 头）
 - [x] T1.6 /send/run（全局单任务 409；同步等待；冒烟通过）
-- [ ] T1.7 真实账号冒烟 —— 需用户配合扫码（chromium 未安装：`.venv/Scripts/python -m playwright install chromium`）
+- [x] T1.7 真实账号冒烟 —— 09-15 完成：真人扫码 → 导出身份 → 播种账号 profile → 建账号(id=1) → Cookie 写入 data/.cookie(55 条) → 刷好友 17 个。期间暴露并修复 4 个真实缺陷（见会话 4 记录）
 - 决策记录：
   - 09-14 | T1.3 | 上游 `_do_user_task_locked` 整段平移而非重写 | 保留上游踩坑成果（IM 观察器强确认/失败分类/弹窗处理），仅替换持久化层
   - 09-14 | T1.5 | noVNC 反代延后 | v1 二维码+状态轮询可完成扫码；滑块验证等人工干预场景待补（见待办）
@@ -686,6 +686,18 @@ python main.py --port 18788 --token devtoken
   - 引擎 4 处 `runtime.lock.locked()` check-then-act 竞态（/send/run、/friends/refresh、/cookies/export、/login/export）：并发请求可能从 409 退化为排队等待，但互斥仍成立。Go 侧 TriggerSend 用原子 beginSend 无此问题。
   - runManualSend 用 `context.Background()` 不响应关停：手动 send 不阻塞 graceful shutdown，进程退出时强制中断。设计取舍可接受。
 - 仍未做（计划既定遗留，非本次审查新发现）：T1.7 真实扫码冒烟 / Docker 构建冒烟 / Cookie 自动重导出。
+
+**2026-09-15（会话 4）：T1.7 真实账号冒烟达成 + 登录导出链 4 个真实缺陷修复，commits e86a538 / eafb4ee**
+
+真人扫码实测跑通完整闭环：扫码 → 导出身份 → 播种账号 profile → 建账号 id=1 → `data/.cookie` 写入 55 条（含 sessionid/sid_guard）→ 刷好友 17 人。过程中按顺序暴露并修复：
+
+1. **`logged_in` 判定依赖脆弱 xpath（e86a538）**：`status()` 只靠 `collect_login_result` 抓 `garfish_app_for_douyin_creator_pc_home/div/div[2]/...` 绝对路径 xpath，抖音页面改版即失配 → 1s 超时被吞 → `logged_in` 恒 False，扫码成功后前端永远卡在二维码轮询。改为 URL 判定（`/creator-micro/` 或 `/user/self`），身份字段降级 best-effort。
+2. **`/login/export` 先 close 后 copy 会 502（cd1c76f→eafb4ee 演进）**：LD `/close` 默认 `clear_profile=True` 会 rmtree login-profile；后续改为"先 copy"又在浏览器运行时复制 Cookies（WinError 32 独占锁）。最终方案：LD `/close` 增加 `clear_profile` 查询参数，引擎调 `/close?clear_profile=false` —— 既释放文件锁又保留复制源。
+3. **cookie 播种方案回归上游思路（eafb4ee）**：只复制 login-profile 在 Windows 上不可靠——cookie value 用 DPAPI 加密、key 在 `Local State`，复制后 Chromium 静默丢弃全部 cookie（SQLite 里 60 行仍在，`context.cookies()` 读回 0 条 → `cookie_count: 0`）。改为：复制 profile（附属状态）+ **显式 `context.add_cookies(LD 导出的 cookie)`**（主路径）。修复后 `cookie_count: 57`。
+4. **profile 根目录双默认值分叉（eafb4ee）**：`core/browser.DEFAULT_PROFILE_ROOT` 是上游 Docker 硬编码 `/opt/douyin-sparkflow/state/browser-profiles`，而 `utils/config.profile_root()` 默认 `repo_root()/state/browser-profiles`。未设 env 时二者分叉：copytree 写 A 目录、`profile_context` 去 B 目录读。统一为 `config.profile_root()`（env `SPARKFLOW_BROWSER_PROFILE_ROOT` 优先）。
+5. 附带：`_get_active_page` 死 context 自愈（commit 2881c3d）——native 模式 Chromium 窗口被关/崩溃后 `context.new_page()` 抛 `TargetClosedError`，`_context_is_closed` 靠 `_impl_obj` 探测不到"对象在但连接断"，导致所有 `/qr` 永久 500。
+
+新增 `spark-engine/spike/cookie_diag.py`（读指定 profile 的 douyin cookie 数，排查用）。
 
 ## 13. 参考文件速查
 
