@@ -341,8 +341,23 @@ class LoginDesktopManager:
                     return candidate
         except Exception:
             pass
-        self.page = await self.context.new_page()
-        return self.page
+        # 改造说明(火花融合): context/浏览器可能已死(TargetClosedError,
+        # _context_is_closed 靠 _impl_obj 属性探测不到这种"对象在但连接断"的状态)。
+        # native 模式下 Chromium 窗口被关/崩溃后,旧逻辑这里直接 new_page() 抛
+        # TargetClosedError → /qr 永久 500 不自愈。这里先试 new_page,失败则
+        # stop(clear_profile=False,不清登录 profile)+ start() 重建 Playwright,
+        # 再重试一次 new_page。受益所有走 _get_active_page 的端点。
+        try:
+            self.page = await self.context.new_page()
+            return self.page
+        except Exception:
+            try:
+                await self.stop(clear_profile=False)
+            except Exception:
+                pass
+            await self.start()
+            self.page = await self.context.new_page()
+            return self.page
 
     async def stop(self, clear_profile=False):
         async with self._lock:
