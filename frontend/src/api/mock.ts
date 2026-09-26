@@ -1266,7 +1266,8 @@ export function mockRoute(req: MockRequest): MockResponse {
           if (downloadRoot !== undefined) existing.download_root = downloadRoot;
           if (applySubscribe) upsertCreatorSubscription(existing.id, applySubscribe.interval, applySubscribe.quality, applySubscribe.autoDownload);
           const scanId = startScan(existing.id, false);
-          return { status: 202, json: { creator_id: existing.id, scan_id: scanId, creator: creatorJson(existing) } };
+          // 契约 v1.4c:重复添加 is_new=false(前端据此提示"该博主已存在")
+          return { status: 202, json: { creator_id: existing.id, scan_id: scanId, creator: creatorJson(existing), is_new: false } };
         }
         const nickname = `新博主·${pick(NICK_POOL)}`;
         const creator: MockCreator = {
@@ -1284,7 +1285,7 @@ export function mockRoute(req: MockRequest): MockResponse {
         state.creators.push(creator);
         if (applySubscribe) upsertCreatorSubscription(creator.id, applySubscribe.interval, applySubscribe.quality, applySubscribe.autoDownload);
         const scanId = startScan(creator.id, true);
-        return { status: 202, json: { creator_id: creator.id, scan_id: scanId, creator: creatorJson(creator) } };
+        return { status: 202, json: { creator_id: creator.id, scan_id: scanId, creator: creatorJson(creator), is_new: true } };
       }
       return err(405, "method not allowed");
     }

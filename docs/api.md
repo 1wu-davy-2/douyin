@@ -35,7 +35,7 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/creators` | `{profile_url, download_root?: string, subscribe?: {interval_minutes: int, quality?: string, auto_download: bool}, group?: string, alias?: string}` → **202** `{creator_id, scan_id, creator: {...}}`(异步扫描,SSE 报进度)。可选参数:`download_root` 添加时即设独立下载根(校验同 download-root 端点);`subscribe` 非空时同时创建 creator 级订阅(interval_minutes 必填,quality 缺省=全局默认,auto_download 默认 true);`group` 初始分组名(空=未分组);`alias` 显示别名。URL 支持主页链接或 sec_uid。重复添加返回已有 creator 并同样触发扫描(可选参数同样生效) |
+| POST | `/api/creators` | `{profile_url, download_root?: string, subscribe?: {interval_minutes: int, quality?: string, auto_download: bool}, group?: string, alias?: string}` → **202** `{creator_id, scan_id, creator: {...}, is_new: bool}`(异步扫描,SSE 报进度)。可选参数:`download_root` 添加时即设独立下载根(校验同 download-root 端点);`subscribe` 非空时同时创建 creator 级订阅(interval_minutes 必填,quality 缺省=全局默认,auto_download 默认 true);`group` 初始分组名(空=未分组);`alias` 显示别名。URL 支持主页链接或 sec_uid。重复添加返回已有 creator 并同样触发扫描(可选参数同样生效);`is_new`(v1.4c)区分二者:`true`=新建,`false`=该博主已在库中(此时 `subscribe` 会**覆盖**已有订阅的 interval/quality/auto_download 并置 `enabled=1`) |
 | PATCH | `/api/creators/{id}` | `{alias?: string\|null, group?: string\|null}` → `{ok, alias, group}`;alias null/空=清除别名(显示默认昵称),group null/空=移出分组 |
 | GET | `/api/creators` | → `[{id, sec_uid, nickname, alias, group, avatar_url, profile_url, reported_work_count, works_count, downloaded_count, download_bytes, created_at}]`(按 created_at desc);`download_bytes` = 已下载资产字节总和;`alias` 用户设置的显示别名(null=用 nickname);`group` 分组名(null=未分组) |
 | GET | `/api/creators/{id}` | 单个详情,字段同上 + `last_scan: {id, status, pages, new_count, updated_count, empty_pages, completeness, started_at, finished_at, last_error}` |

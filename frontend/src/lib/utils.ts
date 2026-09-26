@@ -35,3 +35,11 @@ export function removeFromSet(set: ReadonlySet<number>, ids: Iterable<number>): 
 export function isAbsolutePath(p: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith("/");
 }
+
+/**
+ * 从主页链接或裸 sec_uid 中取出去重用的 sec_uid(正则与后端 secUIDPattern 一致,
+ * 后端就是以它为唯一判重键),取不到返回 ""。
+ */
+export function extractSecUid(input: string): string {
+  return input.trim().match(/MS4w[A-Za-z0-9_-]{16,}/)?.[0] ?? "";
+}

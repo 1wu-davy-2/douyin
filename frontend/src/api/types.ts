@@ -126,6 +126,8 @@ export interface CreateCreatorResult {
   scan_id: number;
   /** 契约 v1.4:202 响应带回完整 creator 视图(含 alias/group)。 */
   creator?: Creator;
+  /** 契约 v1.4c:true=新建;false=该博主已存在(复用已有记录,只触发增量扫描)。 */
+  is_new?: boolean;
 }
 
 /** 契约 v1.4:PATCH /api/creators/{id} 请求与响应。alias/group null 或空串 = 清除。 */

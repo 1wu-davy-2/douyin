@@ -1,6 +1,8 @@
 /**
  * 作品库页(核心):
- * 左列:添加博主"+"弹引导弹窗(别名/分组/独立下载根/监控参数,契约 v1.4/1.4b);
+ * 左列:添加博主"+"弹引导弹窗(别名/分组/独立下载根/监控参数,契约 v1.4/1.4b;
+ *       链接按 sec_uid 命中已有博主时弹窗内预警"该博主已存在",契约 v1.4c);
+ *       博主筛选框(按 别名/昵称 过滤分组树,筛选时强制展开分组);
  *       博主按分组树形展示(组头可折叠,localStorage 记忆;未分组平铺排最后);
  *       博主卡片显示 别名 ?? 昵称(alias 存在时次要文字显示原昵称),SSE scan.progress 驱动扫描进度条。
  * 右列:选中博主详情(标题行显示别名 + ✏️ 重命名/分组弹窗),Tabs(作品/合集)。
@@ -17,7 +19,9 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  Search,
   Trash2,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "../api/client";
@@ -72,7 +76,7 @@ import { useDebouncedValue } from "../lib/use-debounced-value";
 import { getScanSnapshot, subscribeScans, type LiveScan } from "../lib/scan-store";
 import { formatBytes, truncateMiddle } from "../lib/format";
 import { openPlayer } from "../lib/player-store";
-import { cn, isAbsolutePath, removeFromSet, toggleInSet, unionIntoSet } from "../lib/utils";
+import { cn, extractSecUid, isAbsolutePath, removeFromSet, toggleInSet, unionIntoSet } from "../lib/utils";
 import { CollectionsPanel } from "./library/collections-panel";
 import { WorksPanel } from "./library/works-panel";
 
@@ -181,8 +185,19 @@ export function LibraryPage() {
     return map;
   }, [subscriptions.data]);
 
-  // 分组树(无分组时保持平铺;有分组时未分组排最后)
-  const grouped = useMemo(() => buildCreatorGroups(creatorList), [creatorList]);
+  // 博主筛选:按 别名 / 昵称 过滤左列(纯前端,不影响选中与右列)
+  const [creatorFilter, setCreatorFilter] = useState("");
+  const filteredCreators = useMemo(() => {
+    const kw = creatorFilter.trim().toLowerCase();
+    if (!kw) return creatorList;
+    return creatorList.filter(
+      (c) => (c.alias ?? "").toLowerCase().includes(kw) || c.nickname.toLowerCase().includes(kw),
+    );
+  }, [creatorList, creatorFilter]);
+  const filteringCreators = creatorFilter.trim().length > 0;
+
+  // 分组树(无分组时保持平铺;有分组时未分组排最后);分组计数随筛选结果变化
+  const grouped = useMemo(() => buildCreatorGroups(filteredCreators), [filteredCreators]);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsedGroups);
   const toggleGroupCollapsed = (name: string) => {
     setCollapsedGroups((prev) => {
@@ -242,10 +257,28 @@ export function LibraryPage() {
   const [profileUrl, setProfileUrl] = useState("");
   /** 点击"+"后先弹引导弹窗,确认才 POST(契约 v1.4/1.4b)。 */
   const [wizardOpen, setWizardOpen] = useState(false);
+  /**
+   * 契约 v1.4c:粘贴的链接若命中已有博主(按 sec_uid 判重,与后端同键),
+   * 弹窗内提前预警,不必等 202 的 is_new 回来才知道是重复添加。
+   */
+  const existingCreator = useMemo(() => {
+    const secUid = extractSecUid(profileUrl);
+    return secUid ? creatorList.find((c) => c.sec_uid === secUid) ?? null : null;
+  }, [profileUrl, creatorList]);
   const addCreatorMut = useMutation({
     mutationFn: (input: CreateCreatorInput) => createCreator(input),
-    onSuccess: (res) => {
-      toast.success("博主已加入,开始扫描作品");
+    onSuccess: (res, input) => {
+      if (res.is_new === false) {
+        // 后端复用了已有记录(只触发增量扫描),文案不能再说"已加入"
+        const name = res.creator ? creatorDisplayName(res.creator) : "该博主";
+        toast.info("该博主已存在,已触发增量扫描", {
+          description: input.subscribe
+            ? `已复用「${name}」的记录,订阅参数按本次设置覆盖`
+            : `已复用「${name}」的记录,未新增`,
+        });
+      } else {
+        toast.success("博主已加入,开始扫描作品");
+      }
       setProfileUrl("");
       setWizardOpen(false);
       setSelectedCreatorId(res.creator_id);
@@ -389,6 +422,31 @@ export function LibraryPage() {
           </Button>
         </form>
 
+        {/* 博主筛选:按 别名 / 昵称 过滤左列(无博主时不显示) */}
+        {creatorList.length > 0 ? (
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={creatorFilter}
+              onChange={(e) => setCreatorFilter(e.target.value)}
+              placeholder="筛选博主(别名 / 昵称)"
+              className={cn("pl-8", filteringCreators && "pr-8")}
+              aria-label="筛选博主"
+            />
+            {filteringCreators ? (
+              <button
+                type="button"
+                onClick={() => setCreatorFilter("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+                title="清除筛选"
+                aria-label="清除筛选"
+              >
+                <X className="size-3.5" />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
         {creators.isPending ? (
           Array.from({ length: 4 }, (_, i) => (
             <div key={i} className="space-y-2 rounded-xl border border-border p-3">
@@ -407,9 +465,15 @@ export function LibraryPage() {
             title="还没有博主"
             description="在上方粘贴抖音主页链接或 sec_uid,添加第一个博主"
           />
+        ) : filteredCreators.length === 0 ? (
+          <EmptyState
+            icon={Search}
+            title="没有匹配的博主"
+            description={`没有别名或昵称包含“${creatorFilter.trim()}”的博主`}
+          />
         ) : grouped.groups.length === 0 ? (
           /* 无分组:保持平铺现状 */
-          creatorList.map((c) => (
+          filteredCreators.map((c) => (
             <CreatorCard
               key={c.id}
               creator={c}
@@ -427,7 +491,8 @@ export function LibraryPage() {
           <>
             {/* 有分组:组头可折叠(状态存 localStorage),组内排序不变;未分组平铺排最后 */}
             {grouped.groups.map((g) => {
-              const collapsed = collapsedGroups.has(g.name);
+              // 筛选时强制展开:否则命中的博主会被折叠的分组藏住(localStorage 状态不动)
+              const collapsed = !filteringCreators && collapsedGroups.has(g.name);
               return (
                 <div key={g.name} className="space-y-2">
                   <button
@@ -642,6 +707,7 @@ export function LibraryPage() {
         onOpenChange={setWizardOpen}
         profileUrl={profileUrl.trim()}
         groupSuggestions={groupSuggestions}
+        existing={existingCreator}
         pending={addCreatorMut.isPending}
         onSubmit={(input) => addCreatorMut.mutate(input)}
       />
@@ -857,6 +923,7 @@ function AddCreatorDialog({
   onOpenChange,
   profileUrl,
   groupSuggestions,
+  existing,
   pending,
   onSubmit,
 }: {
@@ -864,6 +931,8 @@ function AddCreatorDialog({
   onOpenChange: (open: boolean) => void;
   profileUrl: string;
   groupSuggestions: string[];
+  /** 契约 v1.4c:该链接已存在的博主(按 sec_uid 判重),null = 新博主。 */
+  existing: Creator | null;
   pending: boolean;
   onSubmit: (input: CreateCreatorInput) => void;
 }) {
@@ -922,7 +991,11 @@ function AddCreatorDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="text-base">添加博主</DialogTitle>
-          <DialogDescription>确认后立即开始首次扫描,可在扫描完成前继续操作其他博主</DialogDescription>
+          <DialogDescription>
+            {existing
+              ? "该博主已在库中,确认后只触发一次增量扫描"
+              : "确认后立即开始首次扫描,可在扫描完成前继续操作其他博主"}
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-3.5">
           <div className="space-y-1.5">
@@ -931,6 +1004,21 @@ function AddCreatorDialog({
               {profileUrl}
             </p>
           </div>
+          {existing ? (
+            <div className="space-y-1 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2">
+              <p className="text-sm font-medium text-warning">
+                该博主已存在:{creatorDisplayName(existing)}
+              </p>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                确认后不新增记录,而是复用已有博主并触发一次增量扫描。
+              </p>
+              {monitor ? (
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  「加入监控」会覆盖其现有订阅的间隔 / 画质 / 自动下载,并重新启用该订阅。
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           <div className="space-y-1.5">
             <Label htmlFor="add-creator-alias">别名(可选)</Label>
             <Input
@@ -1044,7 +1132,7 @@ function AddCreatorDialog({
             取消
           </Button>
           <Button onClick={handleSubmit} disabled={pending}>
-            {pending ? "添加中…" : "确认添加"}
+            {pending ? "添加中…" : existing ? "确认并扫描" : "确认添加"}
           </Button>
         </DialogFooter>
       </DialogContent>

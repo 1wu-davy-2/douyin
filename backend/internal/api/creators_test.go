@@ -152,12 +152,17 @@ func TestCreatorScanE2EMock(t *testing.T) {
 	var created struct {
 		CreatorID int64 `json:"creator_id"`
 		ScanID    int64 `json:"scan_id"`
+		IsNew     *bool `json:"is_new"`
 	}
 	if err := json.Unmarshal(raw, &created); err != nil {
 		t.Fatalf("decode 202 body: %v (%s)", err, raw)
 	}
 	if created.CreatorID <= 0 || created.ScanID <= 0 {
 		t.Fatalf("202 body %s lacks ids", raw)
+	}
+	// First add of a sec_uid is a create (contract v1.4c).
+	if created.IsNew == nil || !*created.IsNew {
+		t.Fatalf("first add is_new = %v, want true (%s)", created.IsNew, raw)
 	}
 
 	// 2. Wait for the scan to finish.
@@ -377,9 +382,15 @@ func TestCreatorScanE2EMock(t *testing.T) {
 	}
 	var again struct {
 		CreatorID int64 `json:"creator_id"`
+		IsNew     *bool `json:"is_new"`
 	}
 	if err := json.Unmarshal(raw, &again); err != nil || again.CreatorID != created.CreatorID {
 		t.Fatalf("re-add body %s (err %v), want creator_id %d", raw, err, created.CreatorID)
+	}
+	// Contract v1.4c: the UI relies on is_new=false to say "already exists"
+	// instead of claiming a fresh add.
+	if again.IsNew == nil || *again.IsNew {
+		t.Fatalf("re-add is_new = %v, want false (%s)", again.IsNew, raw)
 	}
 
 	// 10. rescan endpoint -> 202.

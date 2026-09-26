@@ -128,11 +128,15 @@ func scanCreatorView(scan func(...any) error) (creatorView, error) {
 
 // handleCreateCreator POST /api/creators {profile_url, download_root?,
 // subscribe?, group?, alias?} (contract v1.4b) -> 202 {creator_id, scan_id,
-// creator}. The scan runs asynchronously; adding an existing creator returns
-// the known row and triggers a new (incremental) scan. Optional parameters
-// also apply on re-add. subscribe (non-null) additionally creates — or on
-// re-add refreshes — the creator-level subscription (interval required,
+// creator, is_new}. The scan runs asynchronously; adding an existing creator
+// returns the known row and triggers a new (incremental) scan. Optional
+// parameters also apply on re-add. subscribe (non-null) additionally creates —
+// or on re-add refreshes — the creator-level subscription (interval required,
 // quality = given or the global default, auto_download defaults true).
+//
+// is_new (contract v1.4c) distinguishes the two cases so the UI can say "this
+// creator is already in the library" instead of claiming a fresh add; without
+// it a re-add is indistinguishable from the first add (same 202, same body).
 func (s *Server) handleCreateCreator(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Scanner == nil {
 		writeInternalError(w, errors.New("scanner not wired"))
@@ -278,6 +282,7 @@ func (s *Server) handleCreateCreator(w http.ResponseWriter, r *http.Request) {
 		"creator_id": creatorID,
 		"scan_id":    scanID,
 		"creator":    creator,
+		"is_new":     isNew,
 	})
 }
 
